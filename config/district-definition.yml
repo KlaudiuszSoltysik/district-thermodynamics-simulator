@@ -1,0 +1,628 @@
+name: "Naramowice District"
+
+metadata:
+  description: "Mixed use district"
+  latitude: 52.445212
+  longitude: 16.952679
+  elevation: 75.0
+  timezone: "Europe/Warsaw"
+  ground_temperature: 8.5
+
+buildings:
+  - id: "b1"
+
+    standards:
+      heating_power_per_m2: 100.0
+      cooling_power_per_m2: 50.0
+      ach_wind_coef: 0.005
+      air_mixing_rate: 0.05
+      wall_ext:
+        u_value: 0.15
+        heat_capacity_per_m2: 45000
+        absorptance: 0.5
+      wall_int_load:
+        u_value: 1.0
+        heat_capacity_per_m2: 45000
+      wall_int_div:
+        u_value: 2.0
+        heat_capacity_per_m2: 12000
+      roof:
+        u_value: 0.1
+        heat_capacity_per_m2: 25000
+        absorptance: 0.7
+      floor_ground:
+        u_value: 0.25
+        heat_capacity_per_m2: 40000
+        absorptance: 0
+      slab_inter:
+        u_value: 1.0
+        heat_capacity_per_m2: 65000
+      window:
+        u_value: 0.8
+        shgc: 0.5
+      door_ext:
+        u_value: 1.1
+      door_int:
+        u_value: 2.5
+      door_apt:
+        u_value: 1.1
+      room:
+        heat_capacity_per_m2: 10000
+
+    apartments:
+      - id: "apt1"
+        name: "Apartment 1"
+        rooms:
+          - id: "room1"
+            name: "Living Room"
+            area: 34.0
+            volume: 102.0
+            heat_capacity_per_m2: room
+          - id: "room2"
+            name: "Bathroom"
+            area: 6.0
+            volume: 18.0
+            heat_capacity_per_m2: room
+        connections:
+          - type: "wall"
+            from: "room1"
+            to: "room2"
+            area: 9.0
+            thermal_code: wall_int_div
+      - id: "apt2"
+        name: "Apartment 2"
+        rooms:
+          - id: "room1"
+            name: "Living Room"
+            area: 34.0
+            volume: 102.0
+            heat_capacity_per_m2: room
+          - id: "room2"
+            name: "Bathroom"
+            area: 6.0
+            volume: 18.0
+            heat_capacity_per_m2: room
+        connections:
+          - type: "wall"
+            from: "room1"
+            to: "room2"
+            area: 9.0
+            thermal_code: wall_int_div
+      - id: "apt3"
+        name: "Apartment 3"
+        rooms:
+          - id: "room1"
+            name: "Living Room"
+            area: 34.0
+            volume: 102.0
+            heat_capacity_per_m2: room
+          - id: "room2"
+            name: "Bathroom"
+            area: 6.0
+            volume: 18.0
+            heat_capacity_per_m2: room
+        connections:
+          - type: "wall"
+            from: "room1"
+            to: "room2"
+            area: 9.0
+            thermal_code: wall_int_div
+      - id: "apt4"
+        name: "Apartment 4"
+        rooms:
+          - id: "room1"
+            name: "Living Room"
+            area: 34.0
+            volume: 102.0
+            heat_capacity_per_m2: room
+          - id: "room2"
+            name: "Bathroom"
+            area: 6.0
+            volume: 18.0
+            heat_capacity_per_m2: room
+        connections:
+          - type: "wall"
+            from: "room1"
+            to: "room2"
+            area: 9.0
+            thermal_code: wall_int_div
+      - id: "apt5"
+        name: "Apartment 5"
+        rooms:
+          - id: "room1"
+            name: "Living Room"
+            area: 34.0
+            volume: 102.0
+            heat_capacity_per_m2: room
+          - id: "room2"
+            name: "Bathroom"
+            area: 6.0
+            volume: 18.0
+            heat_capacity_per_m2: room
+        connections:
+          - type: "wall"
+            from: "room1"
+            to: "room2"
+            area: 9.0
+            thermal_code: wall_int_div
+      - id: "apt6"
+        name: "Apartment 6"
+        rooms:
+          - id: "room1"
+            name: "Living Room"
+            area: 34.0
+            volume: 102.0
+            heat_capacity_per_m2: room
+          - id: "room2"
+            name: "Bathroom"
+            area: 6.0
+            volume: 18.0
+            heat_capacity_per_m2: room
+        connections:
+          - type: "wall"
+            from: "room1"
+            to: "room2"
+            area: 9.0
+            thermal_code: wall_int_div
+      - id: "apt7"
+        name: "Staircase"
+        rooms:
+          - id: "room1"
+            name: "First floor"
+            area: 16.0
+            volume: 48.0
+            heat_capacity_per_m2: room
+          - id: "room2"
+            name: "Second floor"
+            area: 16.0
+            volume: 48.0
+            heat_capacity_per_m2: room
+          - id: "room3"
+            name: "Third floor"
+            area: 16.0
+            volume: 48.0
+            heat_capacity_per_m2: room
+        connections:
+          - type: "slab"
+            from: "room1"
+            to: "room2"
+            area: 16.0
+            thermal_code: wall_int_div
+          - type: "slab"
+            from: "room2"
+            to: "room3"
+            area: 16.0
+            thermal_code: wall_int_div
+    internal_connections:
+      - type: "wall"
+        from: "apt1:room1"
+        to: "apt7:room1"
+        area: 12.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt1:room2"
+        to: "apt7:room1"
+        area: 6.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt2:room1"
+        to: "apt7:room1"
+        area: 12.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt2:room2"
+        to: "apt7:room1"
+        area: 6.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt3:room1"
+        to: "apt7:room2"
+        area: 12.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt3:room2"
+        to: "apt7:room2"
+        area: 6.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt4:room1"
+        to: "apt7:room2"
+        area: 12.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt4:room2"
+        to: "apt7:room2"
+        area: 6.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt5:room1"
+        to: "apt7:room3"
+        area: 12.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt5:room2"
+        to: "apt7:room3"
+        area: 6.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt6:room1"
+        to: "apt7:room3"
+        area: 12.0
+        thermal_code: wall_int_load
+      - type: "wall"
+        from: "apt6:room2"
+        to: "apt7:room3"
+        area: 6.0
+        thermal_code: wall_int_load
+      - type: "slab"
+        from: "apt1:room1"
+        to: "apt3:room1"
+        area: 34.0
+        thermal_code: slab_inter
+      - type: "slab"
+        from: "apt1:room2"
+        to: "apt3:room2"
+        area: 6.0
+        thermal_code: slab_inter
+      - type: "slab"
+        from: "apt2:room1"
+        to: "apt3:room1"
+        area: 34.0
+        thermal_code: slab_inter
+      - type: "slab"
+        from: "apt2:room2"
+        to: "apt4:room2"
+        area: 6.0
+        thermal_code: slab_inter
+      - type: "slab"
+        from: "apt3:room1"
+        to: "apt5:room1"
+        area: 34.0
+        thermal_code: slab_inter
+      - type: "slab"
+        from: "apt3:room2"
+        to: "apt5:room2"
+        area: 6.0
+        thermal_code: slab_inter
+      - type: "slab"
+        from: "apt4:room1"
+        to: "apt6:room1"
+        area: 34.0
+        thermal_code: slab_inter
+      - type: "slab"
+        from: "apt4:room2"
+        to: "apt6:room2"
+        area: 6.0
+        thermal_code: slab_inter
+    external_connections:
+      - type: "wall"
+        from: "apt7:room1"
+        to: "outside"
+        area: 12.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+      - type: "wall"
+        from: "apt1:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt1:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 90
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt1:room1"
+        to: "outside"
+        area: 15.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt1:room2"
+        to: "outside"
+        area: 9.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt2:room2"
+        to: "outside"
+        area: 9.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt2:room1"
+        to: "outside"
+        area: 15.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt1:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 270
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt2:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt7:room2"
+        to: "outside"
+        area: 12.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+      - type: "wall"
+        from: "apt3:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt3:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 90
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt3:room1"
+        to: "outside"
+        area: 15.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt3:room2"
+        to: "outside"
+        area: 9.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt4:room2"
+        to: "outside"
+        area: 9.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt4:room1"
+        to: "outside"
+        area: 15.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt4:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 270
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt4:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt7:room3"
+        to: "outside"
+        area: 12.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+      - type: "wall"
+        from: "apt5:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt5:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 90
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt5:room1"
+        to: "outside"
+        area: 15.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt5:room2"
+        to: "outside"
+        area: 9.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt6:room2"
+        to: "outside"
+        area: 9.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt6:room1"
+        to: "outside"
+        area: 15.0
+        thermal_code: wall_ext
+        azimuth: 0
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt6:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 270
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "wall"
+        from: "apt6:room1"
+        to: "outside"
+        area: 18.0
+        thermal_code: wall_ext
+        azimuth: 180
+        tilt: 90
+        windows:
+          - area: 1.5
+            thermal_code: window
+      - type: "floor"
+        from: "apt1:room1"
+        to: "ground"
+        area: 34.0
+        thermal_code: floor_ground
+        azimuth: 0
+        tilt: 180
+      - type: "floor"
+        from: "apt1:room2"
+        to: "ground"
+        area: 6.0
+        thermal_code: floor_ground
+        azimuth: 0
+        tilt: 180
+      - type: "floor"
+        from: "apt2:room1"
+        to: "ground"
+        area: 34.0
+        thermal_code: floor_ground
+        azimuth: 0
+        tilt: 180
+      - type: "floor"
+        from: "apt2:room2"
+        to: "ground"
+        area: 6.0
+        thermal_code: floor_ground
+        azimuth: 0
+        tilt: 180
+      - type: "floor"
+        from: "apt7:room1"
+        to: "ground"
+        area: 34.0
+        thermal_code: floor_ground
+        azimuth: 0
+        tilt: 180
+      - type: "roof"
+        from: "apt5:room1"
+        to: "outside"
+        area: 34.0
+        thermal_code: roof
+        azimuth: 0
+        tilt: 0
+      - type: "roof"
+        from: "apt5:room2"
+        to: "outside"
+        area: 6.0
+        thermal_code: roof
+        azimuth: 0
+        tilt: 0
+      - type: "roof"
+        from: "apt6:room1"
+        to: "outside"
+        area: 34.0
+        thermal_code: roof
+        azimuth: 0
+        tilt: 0
+      - type: "roof"
+        from: "apt6:room2"
+        to: "outside"
+        area: 6.0
+        thermal_code: roof
+        azimuth: 0
+        tilt: 0
+      - type: "roof"
+        from: "apt7:room3"
+        to: "outside"
+        area: 34.0
+        thermal_code: roof
+        azimuth: 0
+        tilt: 0
