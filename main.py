@@ -1,0 +1,190 @@
+import asyncio
+import logging
+
+import psycopg2
+import tomllib
+from psycopg2.extras import execute_values
+
+from modules.Simulator import SimulationStep, Simulator
+
+
+def setup_logger():
+    logger = logging.getLogger("dts")
+    logger.setLevel(logging.INFO)
+
+    file_handler = logging.FileHandler("simulation_logs.txt", mode="w")
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+def get_db_credentials(filepath):
+    with open(filepath, "rb") as f:
+        config = tomllib.load(f)
+        return config["timescaledb"]
+
+
+def insert_batch(conn, query, data):
+    with conn.cursor() as cursor:
+        execute_values(cursor, query, data)
+    conn.commit()
+
+
+def reset_database(db_config, logger):
+    try:
+        logger.info("Resetting TimescaleDB database...")
+        conn = psycopg2.connect(**db_config)
+        cursor = conn.cursor()
+
+        cursor.execute("DROP TABLE IF EXISTS simulation_telemetry CASCADE;")
+        cursor.execute("""
+            CREATE TABLE simulation_telemetry (
+            time TIMESTAMPTZ NOT NULL,
+            out_temperature_c DOUBLE PRECISION,
+            out_wind_speed_m_s DOUBLE PRECISION,
+            out_wind_direction_deg DOUBLE PRECISION,
+            out_sun_radiation_w_m2 DOUBLE PRECISION,
+            out_sun_altitude_deg DOUBLE PRECISION,
+            out_sun_azimuth_deg DOUBLE PRECISION,
+            out_co2_ppm INTEGER
+        );
+        """)
+        cursor.execute("SELECT create_hypertable('simulation_telemetry', 'time');")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info("Database reset successfully.")
+    except Exception as e:
+        logger.error(f"Failed to reset database: {e}.")
+        raise
+
+
+async def db_writer_worker(queue, db_config, batch_size, logger):
+    batch_data = []
+
+    conn = psycopg2.connect(**db_config)
+    logger.info("Database background writer started.")
+
+    insert_query = """
+        INSERT INTO simulation_telemetry (
+            time, 
+            out_temperature_c, 
+            out_wind_speed_m_s, 
+            out_wind_direction_deg, 
+            out_sun_radiation_w_m2, 
+            out_sun_altitude_deg, 
+            out_sun_azimuth_deg, 
+            out_co2_ppm
+        ) VALUES %s
+    """
+
+    try:
+        while True:
+            item = await queue.get()
+
+            if item is None:
+                break
+
+            if not isinstance(item, SimulationStep):
+                logger.warning("Received invalid item in queue, skipping.")
+                queue.task_done()
+                continue
+
+            batch_data.append(
+                (
+                    item.time,
+                    item.out_temperature_c,
+                    item.out_wind_speed_m_s,
+                    item.out_wind_direction_deg,
+                    item.out_sun_radiation_w_m2,
+                    item.out_sun_altitude_deg,
+                    item.out_sun_azimuth_deg,
+                    item.out_co2_ppm,
+                )
+            )
+
+            if len(batch_data) >= batch_size:
+                await asyncio.to_thread(insert_batch, conn, insert_query, batch_data)
+                batch_data.clear()
+
+            queue.task_done()
+
+        if batch_data:
+            await asyncio.to_thread(insert_batch, conn, insert_query, batch_data)
+
+    except Exception as e:
+        logger.error(f"Error in database writer worker: {e}")
+    finally:
+        conn.close()
+        logger.info("Database background writer shut down cleanly.")
+
+
+async def main(
+    credentials_path,
+    district_config_path,
+    weather_path,
+    prices_path,
+    dt_seconds=300,
+    batch_size=12,
+):
+    logger = setup_logger()
+    logger.info("Starting simulation script...")
+
+    db_config = get_db_credentials(credentials_path)
+
+    reset_database(db_config, logger)
+
+    data_queue = asyncio.Queue()
+
+    writer_task = asyncio.create_task(
+        db_writer_worker(data_queue, db_config, batch_size, logger=logger)
+    )
+
+    sim = Simulator(
+        district_config_path=district_config_path,
+        weather_path=weather_path,
+        prices_path=prices_path,
+        logger=logger,
+    )
+
+    logger.info("Entering main physics loop...")
+
+    while True:
+        result = sim.run_step(dt_seconds)
+
+        if not result:
+            logger.info("Physics loop finished.")
+            break
+
+        await data_queue.put(result)
+
+        await asyncio.sleep(0)
+
+    await data_queue.put(None)
+
+    await writer_task
+
+    logger.info("Simulation script completed successfully.")
+
+
+if __name__ == "__main__":
+    asyncio.run(
+        main(
+            "config/credentials.toml",
+            "config/district-definition.yml",
+            "config/weather-history.csv",
+            "config/prices-history.csv",
+            dt_seconds=300,
+            batch_size=12,
+        )
+    )
