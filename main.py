@@ -55,7 +55,12 @@ def reset_database(db_config, logger):
             out_sun_radiation_w_m2 DOUBLE PRECISION,
             out_sun_altitude_deg DOUBLE PRECISION,
             out_sun_azimuth_deg DOUBLE PRECISION,
-            out_co2_ppm INTEGER
+            out_co2_ppm INTEGER,
+            sys_electricity_price DOUBLE PRECISION,
+            sys_gas_price DOUBLE PRECISION,
+            sys_pv_yield_kw DOUBLE PRECISION,
+            sys_cop_heating DOUBLE PRECISION,
+            sys_cop_cooling DOUBLE PRECISION
         );
         """)
         cursor.execute("SELECT create_hypertable('simulation_telemetry', 'time');")
@@ -84,7 +89,12 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
             out_sun_radiation_w_m2, 
             out_sun_altitude_deg, 
             out_sun_azimuth_deg, 
-            out_co2_ppm
+            out_co2_ppm,
+            sys_electricity_price,
+            sys_gas_price,
+            sys_pv_yield_kw,
+            sys_cop_heating,
+            sys_cop_cooling
         ) VALUES %s
     """
 
@@ -110,6 +120,11 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                     item.out_sun_altitude_deg,
                     item.out_sun_azimuth_deg,
                     item.out_co2_ppm,
+                    item.sys_electricity_price,
+                    item.sys_gas_price,
+                    item.sys_pv_yield_kw,
+                    item.sys_cop_heating,
+                    item.sys_cop_cooling,
                 )
             )
 
@@ -185,6 +200,6 @@ if __name__ == "__main__":
             "config/weather-history.csv",
             "config/prices-history.csv",
             dt_seconds=300,
-            batch_size=12,
+            batch_size=12 * 24,
         )
     )

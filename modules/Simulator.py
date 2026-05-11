@@ -4,8 +4,15 @@ from datetime import timedelta
 import pandas as pd
 import yaml
 
+from modules.Co2Solver import Co2Solver
 from modules.DistrictConfigParser import DistrictModelParser
+from modules.EnergyService import EnergyService
+from modules.HeatPump import HeatPump
+from modules.MPC import MPC
+from modules.PVFarm import PVFarm
+from modules.ThermalSolver import ThermalSolver
 from modules.WeatherService import WeatherService
+from modules.WeatherSolver import WeatherSolver
 
 
 @dataclass
@@ -18,6 +25,11 @@ class SimulationStep:
     out_sun_altitude_deg: float
     out_sun_azimuth_deg: float
     out_co2_ppm: int
+    sys_electricity_price: float
+    sys_gas_price: float
+    sys_pv_yield_kw: float
+    sys_cop_heating: float
+    sys_cop_cooling: float
 
 
 class Simulator:
@@ -37,58 +49,56 @@ class Simulator:
         parser = DistrictModelParser(district_data)
         parser.parse()
 
-        self.metadata = parser.metadata
+        metadata = parser.metadata
+        num_nodes = parser.num_rooms
+        index_to_id = {v: k for k, v in parser.room_indices.items()}
 
         self.current_time = self.START_TIMESTAMP
         self.end_timestamp = self.START_TIMESTAMP + timedelta(days=365)
 
         self.weather_service = WeatherService(
-            weather_path, self.metadata["latitude"], self.metadata["longitude"]
+            weather_path, metadata["latitude"], metadata["longitude"]
         )
 
-        #         self.num_nodes = parser.N
+        self.energy_service = EnergyService(prices_path)
+
+        self.pv_farm = PVFarm(metadata["pv_max_power_kw"], metadata["pv_efficiency"])
+
+        self.heat_pump = HeatPump(
+            parser.max_heating_power_w, parser.min_heating_power_w
+        )
+
+        self.weather_solver = WeatherSolver(
+            parser.external_connections, parser.standards, num_nodes
+        )
+
+        self.mpc = MPC(
+            self.pv_farm,
+            self.heat_pump,
+            num_nodes,
+            index_to_id,
+        )
+
+        self.thermal_solver = ThermalSolver(
+            parser.thermal_conductance_w_k,
+            parser.heat_capacity_j_k,
+            parser.ext_air_conductance_w_k,
+            parser.ext_ground_conductance_w_k,
+            metadata["ground_temperature"],
+            parser.areas_m2,
+        )
+
+        self.co2_solver = Co2Solver(
+            parser.air_mixing_rate_m3_s,
+            parser.volumes_m3,
+            parser.infiltration_rate_m3_s,
+            num_nodes,
+            index_to_id,
+        )
 
         #
-        #         self.index_to_id = {v: k for k, v in parser.nodes.items()}
-        #
-        #         self.thermal_solver = ThermalSolver(
-        #             parser.G_temp,
-        #             parser.C,
-        #             parser.G_ext_air,
-        #             parser.G_ext_ground,
-        #             self.metadata["ground_temperature"],
-        #             parser.A,
-        #         )
-        #
-        #         self.co2_solver = Co2Solver(
-        #             parser.G_air,
-        #             parser.V,
-        #             parser.G_ext_air_mix,
-        #             self.num_nodes,
-        #             self.index_to_id,
-        #         )
-        #
-        #         self.weather_solver = WeatherSolver(
-        #             parser.external_connections, parser.standards, self.num_nodes
-        #         )
-        #
-
-        #         self.energy_service = EnergyService(prices_path)
-        #
-        #         self.pv_farm = PVFarm()
-        #         self.heat_pump = HeatPump(
-        #             parser.max_heat_pump_powers, parser.min_heat_pump_powers
-        #         )
         #         self.gas_boiler = GasBoiler()
         #
-        #         self.mpc = MPC(
-        #             self.pv_farm,
-        #             self.heat_pump,
-        #             self.gas_boiler,
-        #             self.num_nodes,
-        #             parser.max_heat_pump_powers,
-        #             self.index_to_id,
-        #         )
         #
         #         self.metering_service = MeteringService(
         #             parser.A, self.num_nodes, self.index_to_id
@@ -103,40 +113,37 @@ class Simulator:
 
         weather = self.weather_service.get_weather(self.current_time)
 
-        # energy_costs = self.energy_service.get_effective_costs(
-        #     self.current_time, self.pv_farm, self.heat_pump, weather, noise_sigma
-        # )
-        #
-        #         q_env = self.weather_solver.calculate_environmental_gains(
-        #             weather["sun_radiation"],
-        #             weather["sun_altitude"],
-        #             weather["sun_azimuth"],
-        #             weather["wind_speed"],
-        #             weather["wind_direction"],
-        #             weather["temperature"],
-        #             self.thermal_solver.T,
-        #         )
-        #
-        #         q_hvac, v_hvac = self.mpc.step(
-        #             self.current_time,
-        #             dt,
-        #             self.thermal_solver,
-        #             self.co2_solver,
-        #             self.weather_service,
-        #             self.weather_solver,
-        #             self.energy_service,
-        #             noise_sigma,
-        #         )
-        #
-        #         q_total = q_env + q_hvac
-        #
-        #         temperatures_array = self.thermal_solver.step(
-        #             dt, weather["temperature"], q_total, v_hvac, noise_sigma
-        #         )
-        #
-        #         co2_array = self.co2_solver.step(
-        #             self.current_time, dt, weather["co2"], v_hvac, noise_sigma
-        #         )
+        energy_costs = self.energy_service.get_effective_costs(
+            self.current_time, self.pv_farm, self.heat_pump, weather
+        )
+
+        q_env = self.weather_solver.calculate_environmental_gains(
+            weather.sun_radiation_w_m2,
+            weather.sun_altitude_deg,
+            weather.sun_azimuth_deg,
+            weather.wind_speed_m_s,
+            weather.wind_direction_deg,
+            weather.temperature_c,
+            self.thermal_solver.T,
+        )
+
+        q_hvac, v_hvac = self.mpc.step(
+            self.current_time,
+            dt,
+            self.weather_solver,
+            self.thermal_solver,
+            self.co2_solver,
+            self.weather_service,
+            self.energy_service,
+        )
+
+        q_total = q_env + q_hvac
+
+        temperatures_array = self.thermal_solver.step(
+            dt, weather.temperature_c, q_total, v_hvac
+        )
+
+        co2_array = self.co2_solver.step(self.current_time, dt, weather.co2_ppm, v_hvac)
         #
         #         self.metering_service.update_meters(
         #             self.current_time, dt, energy_costs, q_hvac, v_hvac
@@ -183,4 +190,9 @@ class Simulator:
             out_sun_altitude_deg=weather.sun_altitude_deg,
             out_sun_azimuth_deg=weather.sun_azimuth_deg,
             out_co2_ppm=weather.co2_ppm,
+            sys_electricity_price=energy_costs.electricity_price_per_unit,
+            sys_gas_price=energy_costs.gas_price_per_unit,
+            sys_pv_yield_kw=energy_costs.pv_yield_kw,
+            sys_cop_heating=energy_costs.cop_heating,
+            sys_cop_cooling=energy_costs.cop_cooling,
         )
