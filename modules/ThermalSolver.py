@@ -3,34 +3,47 @@
 
 class ThermalSolver:
     HRV_EFFICIENCY = 0.8
-    RHO_CP_AIR = 1200
+    RHO_CP_AIR_J_M3K = 1200.0
 
-    def __init__(self, G_temp, C, G_ext_air, G_ext_ground, T_ground, A):
-        self.G_temp = G_temp
-        self.C = C
-        self.G_ext_air = G_ext_air
-        self.G_ext_ground = G_ext_ground
-        self.T_ground = T_ground
-        self.A = A
+    def __init__(
+        self,
+        thermal_conductance_w_k,
+        heat_capacity_j_k,
+        ext_air_conductance_w_k,
+        ext_ground_conductance_w_k,
+        ground_temperature_c,
+        areas_m2,
+    ):
+        self.thermal_conductance_w_k = thermal_conductance_w_k
+        self.heat_capacity_j_k = heat_capacity_j_k
+        self.ext_air_conductance_w_k = ext_air_conductance_w_k
+        self.ext_ground_conductance_w_k = ext_ground_conductance_w_k
+        self.ground_temperature_c = ground_temperature_c
+        self.areas_m2 = areas_m2
 
-        self.T = np.full(len(C), 21.0)
+        self.T = np.full(len(self.heat_capacity_j_k), 21.0)
 
-    def step(self, dt, T_outside, q_hvac, v_hvac):
-        Q_inter = np.dot(self.G_temp, self.T) - (np.sum(self.G_temp, axis=1) * self.T)
+    def step(self, dt_seconds, out_temperature_c, q_total_w, v_hvac_m3_s):
 
-        Q_air = self.G_ext_air * (T_outside - self.T)
-
-        Q_ground = self.G_ext_ground * (self.T_ground - self.T)
-
-        Q_vent = (
-            v_hvac
-            * self.RHO_CP_AIR
-            * (1.0 - self.HRV_EFFICIENCY)
-            * (T_outside - self.T)
+        q_inter_w = np.dot(self.thermal_conductance_w_k, self.T) - (
+            np.sum(self.thermal_conductance_w_k, axis=1) * self.T
         )
 
-        total_Q = Q_inter + Q_air + Q_ground + Q_vent + q_hvac
+        q_ext_air_w = self.ext_air_conductance_w_k * (out_temperature_c - self.T)
 
-        self.T += (total_Q / self.C) * dt
+        q_ground_w = self.ext_ground_conductance_w_k * (
+            self.ground_temperature_c - self.T
+        )
+
+        q_vent_w = (
+            v_hvac_m3_s
+            * self.RHO_CP_AIR_J_M3K
+            * (1.0 - self.HRV_EFFICIENCY)
+            * (out_temperature_c - self.T)
+        )
+
+        total_q_w = q_inter_w + q_ext_air_w + q_ground_w + q_vent_w + q_total_w
+
+        self.T += (total_q_w / self.heat_capacity_j_k) * dt_seconds
 
         return self.T

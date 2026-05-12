@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Dict
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -8,7 +10,7 @@ from modules.Co2Solver import Co2Solver
 from modules.DistrictConfigParser import DistrictModelParser
 from modules.EnergyService import EnergyService
 from modules.HeatPump import HeatPump
-from modules.MPC import MPC
+# from modules.MPC import MPC
 from modules.PVFarm import PVFarm
 from modules.ThermalSolver import ThermalSolver
 from modules.WeatherService import WeatherService
@@ -30,6 +32,8 @@ class SimulationStep:
     sys_pv_yield_kw: float
     sys_cop_heating: float
     sys_cop_cooling: float
+    room_temperatures_c: Dict[str, float]
+    room_co2_ppm: Dict[str, int]
 
 
 class Simulator:
@@ -50,8 +54,8 @@ class Simulator:
         parser.parse()
 
         metadata = parser.metadata
-        num_nodes = parser.num_rooms
-        index_to_id = {v: k for k, v in parser.room_indices.items()}
+        self.num_nodes = parser.num_rooms
+        self.index_to_id = {v: k for k, v in parser.room_indices.items()}
 
         self.current_time = self.START_TIMESTAMP
         self.end_timestamp = self.START_TIMESTAMP + timedelta(days=365)
@@ -69,15 +73,15 @@ class Simulator:
         )
 
         self.weather_solver = WeatherSolver(
-            parser.external_connections, parser.standards, num_nodes
+            parser.external_connections, parser.standards, self.num_nodes
         )
 
-        self.mpc = MPC(
-            self.pv_farm,
-            self.heat_pump,
-            num_nodes,
-            index_to_id,
-        )
+        # self.mpc = MPC(
+        #     self.pv_farm,
+        #     self.heat_pump,
+        #     self.num_nodes,
+        #     self.index_to_id,
+        # )
 
         self.thermal_solver = ThermalSolver(
             parser.thermal_conductance_w_k,
@@ -92,8 +96,8 @@ class Simulator:
             parser.air_mixing_rate_m3_s,
             parser.volumes_m3,
             parser.infiltration_rate_m3_s,
-            num_nodes,
-            index_to_id,
+            self.num_nodes,
+            self.index_to_id,
         )
 
         #
@@ -127,15 +131,18 @@ class Simulator:
             self.thermal_solver.T,
         )
 
-        q_hvac, v_hvac = self.mpc.step(
-            self.current_time,
-            dt,
-            self.weather_solver,
-            self.thermal_solver,
-            self.co2_solver,
-            self.weather_service,
-            self.energy_service,
-        )
+        # q_hvac, v_hvac = self.mpc.step(
+        #     self.current_time,
+        #     dt,
+        #     self.weather_solver,
+        #     self.thermal_solver,
+        #     self.co2_solver,
+        #     self.weather_service,
+        #     self.energy_service,
+        # )
+
+        q_hvac = np.zeros(self.co2_solver.num_nodes)
+        v_hvac = np.zeros(self.co2_solver.num_nodes)
 
         q_total = q_env + q_hvac
 
@@ -151,13 +158,6 @@ class Simulator:
         #
         #         energy_clean = {k: round(v, 2) for k, v in energy_costs.items()}
         #
-        #         room_temps = {
-        #             self.index_to_id[i]: round(float(temperatures_array[i]), 2)
-        #             for i in range(self.num_nodes)
-        #         }
-        #         room_co2 = {
-        #             self.index_to_id[i]: int(co2_array[i]) for i in range(self.num_nodes)
-        #         }
         #         room_hvac_q = {
         #             self.index_to_id[i]: round(float(q_hvac[i]), 2)
         #             for i in range(self.num_nodes)
@@ -179,10 +179,19 @@ class Simulator:
 
         self.simulation_time = self.current_time
 
+        room_temps = {
+            self.index_to_id[i]: round(float(temperatures_array[i]), 2)
+            for i in range(self.num_nodes)
+        }
+
+        room_co2 = {
+            self.index_to_id[i]: int(co2_array[i]) for i in range(self.num_nodes)
+        }
+
         self.current_time += timedelta(seconds=dt)
 
         return SimulationStep(
-            time=self.current_time.isoformat(),
+            time=self.simulation_time.isoformat(),
             out_temperature_c=weather.temperature_c,
             out_wind_speed_m_s=weather.wind_speed_m_s,
             out_wind_direction_deg=weather.wind_direction_deg,
@@ -195,4 +204,6 @@ class Simulator:
             sys_pv_yield_kw=energy_costs.pv_yield_kw,
             sys_cop_heating=energy_costs.cop_heating,
             sys_cop_cooling=energy_costs.cop_cooling,
+            room_temperatures_c=room_temps,
+            room_co2_ppm=room_co2
         )

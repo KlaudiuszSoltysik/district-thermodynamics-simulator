@@ -3,7 +3,7 @@ import logging
 
 import psycopg2
 import tomllib
-from psycopg2.extras import execute_values
+from psycopg2.extras import execute_values, Json
 
 from modules.Simulator import SimulationStep, Simulator
 
@@ -48,20 +48,22 @@ def reset_database(db_config, logger):
         cursor.execute("DROP TABLE IF EXISTS simulation_telemetry CASCADE;")
         cursor.execute("""
             CREATE TABLE simulation_telemetry (
-            time TIMESTAMPTZ NOT NULL,
-            out_temperature_c DOUBLE PRECISION,
-            out_wind_speed_m_s DOUBLE PRECISION,
-            out_wind_direction_deg DOUBLE PRECISION,
-            out_sun_radiation_w_m2 DOUBLE PRECISION,
-            out_sun_altitude_deg DOUBLE PRECISION,
-            out_sun_azimuth_deg DOUBLE PRECISION,
-            out_co2_ppm INTEGER,
-            sys_electricity_price DOUBLE PRECISION,
-            sys_gas_price DOUBLE PRECISION,
-            sys_pv_yield_kw DOUBLE PRECISION,
-            sys_cop_heating DOUBLE PRECISION,
-            sys_cop_cooling DOUBLE PRECISION
-        );
+                time TIMESTAMPTZ NOT NULL,
+                out_temperature_c DOUBLE PRECISION,
+                out_wind_speed_m_s DOUBLE PRECISION,
+                out_wind_direction_deg DOUBLE PRECISION,
+                out_sun_radiation_w_m2 DOUBLE PRECISION,
+                out_sun_altitude_deg DOUBLE PRECISION,
+                out_sun_azimuth_deg DOUBLE PRECISION,
+                out_co2_ppm INTEGER,
+                sys_electricity_price DOUBLE PRECISION,
+                sys_gas_price DOUBLE PRECISION,
+                sys_pv_yield_kw DOUBLE PRECISION,
+                sys_cop_heating DOUBLE PRECISION,
+                sys_cop_cooling DOUBLE PRECISION,
+                room_temperatures_c JSONB,
+                room_co2_ppm JSONB
+            );
         """)
         cursor.execute("SELECT create_hypertable('simulation_telemetry', 'time');")
 
@@ -82,19 +84,10 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
 
     insert_query = """
         INSERT INTO simulation_telemetry (
-            time, 
-            out_temperature_c, 
-            out_wind_speed_m_s, 
-            out_wind_direction_deg, 
-            out_sun_radiation_w_m2, 
-            out_sun_altitude_deg, 
-            out_sun_azimuth_deg, 
-            out_co2_ppm,
-            sys_electricity_price,
-            sys_gas_price,
-            sys_pv_yield_kw,
-            sys_cop_heating,
-            sys_cop_cooling
+            time, out_temperature_c, out_wind_speed_m_s, out_wind_direction_deg, 
+            out_sun_radiation_w_m2, out_sun_altitude_deg, out_sun_azimuth_deg, out_co2_ppm,
+            sys_electricity_price, sys_gas_price, sys_pv_yield_kw, sys_cop_heating, sys_cop_cooling,
+            room_temperatures_c, room_co2_ppm
         ) VALUES %s
     """
 
@@ -125,6 +118,8 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                     item.sys_pv_yield_kw,
                     item.sys_cop_heating,
                     item.sys_cop_cooling,
+                    Json(item.room_temperatures_c),
+                    Json(item.room_co2_ppm)
                 )
             )
 

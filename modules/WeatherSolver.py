@@ -4,72 +4,77 @@ import numpy as np
 
 
 class WeatherSolver:
-    RHO_CP_AIR = 1200
-    H_EXTERNAL = 25.0
+    RHO_CP_AIR_J_M3K = 1200.0
+    H_EXTERNAL_W_M2K = 25.0
 
-    def __init__(self, external_connections, standards, N):
+    def __init__(self, external_connections, standards, num_nodes):
         self.connections = external_connections
         self.standards = standards
-        self.N = N
+        self.num_nodes = num_nodes
 
     def calculate_environmental_gains(
         self,
-        sun_rad,
-        sun_altitude,
-        sun_azimuth,
-        wind_speed,
-        wind_direction,
-        temperature_ext,
-        temperature_rooms,
+        sun_radiation_w_m2,
+        sun_altitude_deg,
+        sun_azimuth_deg,
+        wind_speed_m_s,
+        wind_direction_deg,
+        temperature_ext_c,
+        temperature_rooms_c,
     ):
-        q_net = np.zeros(self.N)
+        q_env_w = np.zeros(self.num_nodes)
 
-        if sun_altitude > 0:
-            for connection in self.connections:
-                azimuth_diff = math.radians(sun_azimuth - connection["azimuth"])
-                el_rad = math.radians(sun_altitude)
-                tilt_rad = math.radians(connection["tilt"])
+        if sun_altitude_deg > 0:
+            for conn in self.connections:
+                azimuth_diff_rad = math.radians(sun_azimuth_deg - conn["azimuth"])
+                el_rad = math.radians(sun_altitude_deg)
+                tilt_rad = math.radians(conn["tilt"])
 
                 cos_theta = math.sin(el_rad) * math.cos(tilt_rad) + math.cos(
                     el_rad
-                ) * math.sin(tilt_rad) * math.cos(azimuth_diff)
+                ) * math.sin(tilt_rad) * math.cos(azimuth_diff_rad)
 
                 if cos_theta > 0:
-                    room_idx = connection["room_idx"]
-                    win_area_sum = 0
+                    room_idx = conn["room_idx"]
+                    win_area_sum_m2 = 0.0
 
-                    for window in connection["windows"]:
-                        q_net[room_idx] += (
-                            window["area"] * sun_rad * window["shgc"] * cos_theta
+                    for window in conn.get("windows", []):
+                        q_env_w[room_idx] += (
+                            window["area_m2"]
+                            * sun_radiation_w_m2
+                            * window["shgc"]
+                            * cos_theta
                         )
-                        win_area_sum += window["area"]
+                        win_area_sum_m2 += window["area_m2"]
 
-                    wall_net_area = connection["area_gross"] - win_area_sum
+                    wall_net_area_m2 = conn["area_gross_m2"] - win_area_sum_m2
 
-                    q_net[room_idx] += (
-                        wall_net_area
-                        * sun_rad
-                        * connection["absorptance"]
+                    q_env_w[room_idx] += (
+                        wall_net_area_m2
+                        * sun_radiation_w_m2
+                        * conn["absorptance"]
                         * cos_theta
-                        * (connection["u_value"] / self.H_EXTERNAL)
+                        * (conn["u_value_w_m2k"] / self.H_EXTERNAL_W_M2K)
                     )
 
-        for connection in self.connections:
-            room_idx = connection["room_idx"]
+        for conn in self.connections:
+            room_idx = conn["room_idx"]
 
-            if connection["tilt"] < 10:
+            if conn["tilt"] < 10:
                 exposure = 1.0
             else:
-                wind_az_diff = math.radians(wind_direction - connection["azimuth"])
-                exposure = (math.cos(wind_az_diff) + 1) / 2
+                wind_az_diff_rad = math.radians(wind_direction_deg - conn["azimuth"])
+                exposure = (math.cos(wind_az_diff_rad) + 1.0) / 2.0
 
-            n_wind = (connection["ach_wind_coef"] * wind_speed * exposure) / 3600
+            infiltration_m3_s = (
+                conn["ach_wind_coef"] * wind_speed_m_s * exposure
+            ) / 3600.0
 
-            q_net[room_idx] += (
-                n_wind
-                * connection["volume"]
-                * self.RHO_CP_AIR
-                * (temperature_ext - temperature_rooms[room_idx])
+            q_env_w[room_idx] += (
+                infiltration_m3_s
+                * conn["volume_m3"]
+                * self.RHO_CP_AIR_J_M3K
+                * (temperature_ext_c - temperature_rooms_c[room_idx])
             )
 
-        return q_net
+        return q_env_w
