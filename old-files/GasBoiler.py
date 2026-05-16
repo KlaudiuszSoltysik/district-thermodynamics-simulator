@@ -12,6 +12,8 @@
 
         part_load = min(1.0, max(0.0, part_load))
 
-        efficiency = self.min_efficiency + (1.0 - part_load) * (self.max_efficiency - self.min_efficiency)
+        efficiency = self.min_efficiency + (1.0 - part_load) * (
+            self.max_efficiency - self.min_efficiency
+        )
 
         return efficiency

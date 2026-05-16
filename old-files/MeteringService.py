@@ -26,12 +26,22 @@ class MeteringService:
         self.admin_elec_revenue = 0.0
         self.total_tenant_revenue = 0.0
 
-        self.room_heat_delivered = {self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)}
-        self.room_cool_delivered = {self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)}
-        self.room_vent_volume = {self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)}
-        self.room_energy_usage = {self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)}
+        self.room_heat_delivered = {
+            self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)
+        }
+        self.room_cool_delivered = {
+            self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)
+        }
+        self.room_vent_volume = {
+            self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)
+        }
+        self.room_energy_usage = {
+            self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)
+        }
 
-        self.room_billing_cost = {self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)}
+        self.room_billing_cost = {
+            self.district_id_dict[i]: 0.0 for i in range(self.num_nodes)
+        }
 
         self.set_on_hours()
 
@@ -55,7 +65,9 @@ class MeteringService:
                 is_enabled = mongo_map[full_id]["IsEnabled"]
 
                 if is_enabled and len(is_enabled) == 24:
-                    self.is_enabled_mask[idx, :] = [1.0 if s else 0.0 for s in is_enabled]
+                    self.is_enabled_mask[idx, :] = [
+                        1.0 if s else 0.0 for s in is_enabled
+                    ]
 
     def update_meters(self, current_time, dt, energy_costs, q_hvac, v_hvac):
         self.energy_costs = energy_costs
@@ -90,7 +102,9 @@ class MeteringService:
         self.total_elec_import += grid_buy * hours
         self.total_elec_export += grid_sell * hours
 
-        self.admin_elec_cost += (grid_buy * hours) * (energy_costs["electricity_price"] / 1000.0)
+        self.admin_elec_cost += (grid_buy * hours) * (
+            energy_costs["electricity_price"] / 1000.0
+        )
 
         self.total_gas_import += gas_buy * hours
         self.admin_gas_cost += (gas_buy * hours) * (energy_costs["gas_price"] / 1000.0)
@@ -129,7 +143,8 @@ class MeteringService:
 
     def get_meter_readings(self):
         cost_margin = (self.admin_elec_revenue + self.total_tenant_revenue) - (
-                self.admin_elec_cost + self.admin_gas_cost)
+            self.admin_elec_cost + self.admin_gas_cost
+        )
 
         return {
             "admin_meters": {
@@ -139,20 +154,29 @@ class MeteringService:
                 "gas_import": round(self.total_gas_import, 3),
                 "electricity_cost": round(self.admin_elec_cost, 2),
                 "gas_cost": round(self.admin_gas_cost, 2),
-
                 "admin_electricity_revenue": round(self.admin_elec_revenue, 2),
                 "tenant_billing_revenue": round(self.total_tenant_revenue, 2),
                 "cost_margin": round(cost_margin, 2),
-
-                "electricity_price": round(self.energy_costs.get("electricity_price", 0.0), 2),
-                "gas_price": round(self.energy_costs.get("gas_price", 0.0), 2)
+                "electricity_price": round(
+                    self.energy_costs.get("electricity_price", 0.0), 2
+                ),
+                "gas_price": round(self.energy_costs.get("gas_price", 0.0), 2),
             },
             "tenant_meters": {
-                "heating": {k: round(v, 3) for k, v in self.room_heat_delivered.items()},
-                "cooling": {k: round(v, 3) for k, v in self.room_cool_delivered.items()},
-                "ventilation": {k: round(v, 2) for k, v in self.room_vent_volume.items()},
-                "energy_usage": {k: round(v, 2) for k, v in self.room_energy_usage.items()},
-
-                "billing_cost": {k: round(v, 2) for k, v in self.room_billing_cost.items()}
-            }
+                "heating": {
+                    k: round(v, 3) for k, v in self.room_heat_delivered.items()
+                },
+                "cooling": {
+                    k: round(v, 3) for k, v in self.room_cool_delivered.items()
+                },
+                "ventilation": {
+                    k: round(v, 2) for k, v in self.room_vent_volume.items()
+                },
+                "energy_usage": {
+                    k: round(v, 2) for k, v in self.room_energy_usage.items()
+                },
+                "billing_cost": {
+                    k: round(v, 2) for k, v in self.room_billing_cost.items()
+                },
+            },
         }

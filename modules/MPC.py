@@ -9,6 +9,7 @@ class MPC:
     RECALCULATION_INTERVAL_STEPS = 12
     HORIZON_HOURS = 6
     STEPS_PER_HOUR = 1
+    MAX_VENT_POWER = 0.05
 
     def __init__(
         self,
@@ -47,7 +48,10 @@ class MPC:
 
                 temps = schedule.get("target_temp_c")
                 if temps and len(temps) == 24:
-                    self.target_temp_24h_c[idx, :] = temps
+                    temps_array = np.array(
+                        [np.nan if t is None else float(t) for t in temps]
+                    )
+                    self.target_temp_24h_c[idx, :] = temps_array
 
                 co2_limits = schedule.get("max_co2_ppm")
                 if co2_limits:
@@ -95,14 +99,13 @@ class MPC:
         cop_heat_forecast,
         cop_cool_forecast,
     ):
-        half_idx = self.HORIZON_HOURS * self.num_nodes
+        half_idx = self.control_steps * self.num_nodes
 
-        # Decode optimizer state [-100% to 100%] into physical units
         q_percent_matrix = x_flat[:half_idx].reshape(
-            (self.HORIZON_HOURS, self.num_nodes)
+            (self.control_steps, self.num_nodes)
         )
         v_percent_matrix = x_flat[half_idx:].reshape(
-            (self.HORIZON_HOURS, self.num_nodes)
+            (self.control_steps, self.num_nodes)
         )
 
         q_w_hourly = np.where(
@@ -112,10 +115,10 @@ class MPC:
         )
 
         # Assume max ventilation is 0.05 m^3/s per room (~180 m^3/h)
-        v_m3_s_hourly = (v_percent_matrix / 100.0) * 0.05
+        v_m3_s_hourly = (v_percent_matrix / 100.0) * self.MAX_VENT_POWER
 
         # Expand hourly decisions to standard simulation steps
-        block_size = horizon_steps // self.HORIZON_HOURS
+        block_size = horizon_steps // self.control_steps
         q_hvac_matrix_w = np.repeat(q_w_hourly, block_size, axis=0)
         v_vent_matrix_m3_s = np.repeat(v_m3_s_hourly, block_size, axis=0)
 
@@ -177,20 +180,25 @@ class MPC:
             )
             t_sim_c += (total_q_w / thermal_solver.heat_capacity_j_k) * dt_seconds
 
-            # 3. Penalties & Costs
-            # Temperature comfort (penalize aggressively if outside target +- 0.2)
-            below_min = np.maximum(
-                0, (t_target_horizon_c[k] - self.TEMPERATURE_TOLERANCE_C) - t_sim_c
-            )
-            above_max = np.maximum(
-                0, t_sim_c - (t_target_horizon_c[k] + self.TEMPERATURE_TOLERANCE_C)
+            target_t = t_target_horizon_c[k]
+
+            below_min = np.where(
+                np.isnan(target_t),
+                0.0,
+                np.maximum(0, (target_t - self.TEMPERATURE_TOLERANCE_C) - t_sim_c),
             )
 
-            # If occupied, enforce strictly. If not, allow setback drift (multiply penalty by occupation mask)
-            enforcement_weight = np.where(is_occupied_horizon[k] > 0.5, 1.0, 0.05)
+            above_max = np.where(
+                np.isnan(target_t),
+                0.0,
+                np.maximum(0, t_sim_c - (target_t + self.TEMPERATURE_TOLERANCE_C)),
+            )
 
-            total_penalty += np.sum((below_min**2) * 5000.0 * enforcement_weight)
-            total_penalty += np.sum((above_max**2) * 5000.0 * enforcement_weight)
+            pipe_freeze_risk = np.maximum(0, 16.0 - t_sim_c)
+            total_penalty += np.sum((pipe_freeze_risk**2) * 100000.0)
+
+            total_penalty += np.sum((below_min**2) * 5000.0)
+            total_penalty += np.sum((above_max**2) * 5000.0)
 
             # CO2 comfort (Penalize only if exceeding max allowed PPM)
             co2_violation = np.maximum(0, co2_sim_ppm - co2_max_horizon_ppm[k])
@@ -315,12 +323,12 @@ class MPC:
                 options={"maxiter": 10, "ftol": 1e-3, "disp": False},
             )
 
-            half_idx = self.HORIZON_HOURS * self.num_nodes
+            half_idx = self.control_steps * self.num_nodes
             optimal_q_percent = res.x[:half_idx].reshape(
-                (self.HORIZON_HOURS, self.num_nodes)
+                (self.control_steps, self.num_nodes)
             )
             optimal_v_percent = res.x[half_idx:].reshape(
-                (self.HORIZON_HOURS, self.num_nodes)
+                (self.control_steps, self.num_nodes)
             )
 
             optimal_q_w = np.where(
@@ -346,8 +354,33 @@ class MPC:
                     self.district_id_dict[i]: float(self.cached_v_plan_m3_s[k, i])
                     for i in range(self.num_nodes)
                 }
+
+                t_target_dict = {}
+                for i in range(self.num_nodes):
+                    val = t_target_horizon_c[k, i]
+                    t_target_dict[self.district_id_dict[i]] = (
+                        None if np.isnan(val) else float(val)
+                    )
+
+                co2_max_dict = {
+                    self.district_id_dict[i]: float(co2_max_horizon_ppm[k, i])
+                    for i in range(self.num_nodes)
+                }
+
+                is_occupied_dict = {
+                    self.district_id_dict[i]: float(is_occupied_horizon[k, i])
+                    for i in range(self.num_nodes)
+                }
+
                 forecast_data.append(
-                    {"time": future_t.isoformat(), "q_w": q_dict, "v_m3_s": v_dict}
+                    {
+                        "time": future_t.isoformat(),
+                        "q_w": q_dict,
+                        "v_m3_s": v_dict,
+                        "t_target_c": t_target_dict,
+                        "co2_max_ppm": co2_max_dict,
+                        "is_occupied": is_occupied_dict,
+                    }
                 )
                 future_t += pd.Timedelta(seconds=dt_seconds)
 

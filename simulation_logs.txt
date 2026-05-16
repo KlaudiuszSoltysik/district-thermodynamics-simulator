@@ -1,40 +1,8 @@
-2026-05-16 11:14:23 | INFO | Starting simulation script...
-2026-05-16 11:14:23 | INFO | Resetting TimescaleDB database...
-2026-05-16 11:14:23 | INFO | Database reset successfully.
-2026-05-16 11:14:23 | INFO | Initializing DistrictSimulation instance...
-2026-05-16 11:14:23 | INFO | Simulation configured.
-2026-05-16 11:14:23 | INFO | Entering main physics loop...
-2026-05-16 11:14:37 | INFO | Database background writer started.
-2026-05-16 11:14:37 | INFO | [2024-12-31T23:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:15:04 | INFO | [2024-12-31T23:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:15:04 | INFO | [2025-01-01T00:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:15:31 | INFO | [2025-01-01T00:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:15:31 | INFO | [2025-01-01T01:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:16:00 | INFO | [2025-01-01T01:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:16:00 | INFO | [2025-01-01T02:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:16:28 | INFO | [2025-01-01T02:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:16:28 | INFO | [2025-01-01T03:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:16:48 | INFO | [2025-01-01T03:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:16:48 | INFO | [2025-01-01T04:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:17:13 | INFO | [2025-01-01T04:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:17:13 | INFO | [2025-01-01T05:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:17:37 | INFO | [2025-01-01T05:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:17:37 | INFO | [2025-01-01T06:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:18:03 | INFO | [2025-01-01T06:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:18:03 | INFO | [2025-01-01T07:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:18:30 | INFO | [2025-01-01T07:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:18:30 | INFO | [2025-01-01T08:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:18:57 | INFO | [2025-01-01T08:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:18:57 | INFO | [2025-01-01T09:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:19:36 | INFO | [2025-01-01T09:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:19:36 | INFO | [2025-01-01T10:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:20:03 | INFO | [2025-01-01T10:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:20:03 | INFO | [2025-01-01T11:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:20:29 | INFO | [2025-01-01T11:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:20:29 | INFO | [2025-01-01T12:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:20:58 | INFO | [2025-01-01T12:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:20:58 | INFO | [2025-01-01T13:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:21:27 | INFO | [2025-01-01T13:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:21:27 | INFO | [2025-01-01T14:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
-2026-05-16 11:21:43 | INFO | [2025-01-01T14:55:00+00:00] Batch of 12 telemetry steps saved.
-2026-05-16 11:21:43 | INFO | [2025-01-01T15:00:00+00:00] MPC forecast saved (Horizon: 72 steps)
+2026-05-16 22:51:04 | INFO | Starting simulation script...
+2026-05-16 22:51:04 | INFO | Resetting TimescaleDB database...
+2026-05-16 22:51:04 | INFO | Database reset successfully.
+2026-05-16 22:51:04 | INFO | Initializing DistrictSimulation instance...
+2026-05-16 22:51:04 | INFO | Simulation configured.
+2026-05-16 22:51:04 | INFO | Entering main physics loop...
+2026-05-16 22:51:17 | INFO | Database background writer started.
+2026-05-16 22:51:17 | INFO | [2024-12-31T23:00:00+00:00] MPC forecast saved (Horizon: 72 steps)

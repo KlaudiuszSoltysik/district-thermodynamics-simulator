@@ -76,7 +76,10 @@ def reset_database(db_config, logger):
             CREATE TABLE mpc_forecast (
                 time TIMESTAMPTZ PRIMARY KEY,
                 planned_q_w JSONB,
-                planned_v_m3_s JSONB
+                planned_v_m3_s JSONB,
+                planned_t_target_c JSONB,
+                planned_co2_max_ppm JSONB,
+                planned_is_occupied JSONB
             );
         """)
 
@@ -105,11 +108,14 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
     """
 
     upsert_forecast_query = """
-        INSERT INTO mpc_forecast (time, planned_q_w, planned_v_m3_s)
+        INSERT INTO mpc_forecast (time, planned_q_w, planned_v_m3_s, planned_t_target_c, planned_co2_max_ppm, planned_is_occupied)
         VALUES %s
         ON CONFLICT (time) DO UPDATE SET
             planned_q_w = EXCLUDED.planned_q_w,
-            planned_v_m3_s = EXCLUDED.planned_v_m3_s;
+            planned_v_m3_s = EXCLUDED.planned_v_m3_s,
+            planned_t_target_c = EXCLUDED.planned_t_target_c,
+            planned_co2_max_ppm = EXCLUDED.planned_co2_max_ppm,
+            planned_is_occupied = EXCLUDED.planned_is_occupied;
     """
 
     try:
@@ -149,7 +155,14 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
 
             if item.mpc_forecast:
                 current_horizon_data = [
-                    (f["time"], Json(f["q_w"]), Json(f["v_m3_s"]))
+                    (
+                        f["time"],
+                        Json(f["q_w"]),
+                        Json(f["v_m3_s"]),
+                        Json(f["t_target_c"]),
+                        Json(f["co2_max_ppm"]),
+                        Json(f["is_occupied"]),
+                    )
                     for f in item.mpc_forecast
                 ]
                 logger.info(
