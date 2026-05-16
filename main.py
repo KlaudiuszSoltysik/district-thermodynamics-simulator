@@ -3,7 +3,7 @@ import logging
 
 import psycopg2
 import tomllib
-from psycopg2.extras import execute_values, Json
+from psycopg2.extras import Json, execute_values
 
 from modules.Simulator import SimulationStep, Simulator
 
@@ -46,6 +46,8 @@ def reset_database(db_config, logger):
         cursor = conn.cursor()
 
         cursor.execute("DROP TABLE IF EXISTS simulation_telemetry CASCADE;")
+        cursor.execute("DROP TABLE IF EXISTS mpc_forecast CASCADE;")
+
         cursor.execute("""
             CREATE TABLE simulation_telemetry (
                 time TIMESTAMPTZ NOT NULL,
@@ -62,10 +64,21 @@ def reset_database(db_config, logger):
                 sys_cop_heating DOUBLE PRECISION,
                 sys_cop_cooling DOUBLE PRECISION,
                 room_temperatures_c JSONB,
-                room_co2_ppm JSONB
+                room_co2_ppm JSONB,
+                room_q_hvac_w JSONB,
+                room_q_hvac_perc JSONB,
+                room_v_hvac_m3_s JSONB
             );
         """)
         cursor.execute("SELECT create_hypertable('simulation_telemetry', 'time');")
+
+        cursor.execute("""
+            CREATE TABLE mpc_forecast (
+                time TIMESTAMPTZ PRIMARY KEY,
+                planned_q_w JSONB,
+                planned_v_m3_s JSONB
+            );
+        """)
 
         conn.commit()
         cursor.close()
@@ -77,18 +90,26 @@ def reset_database(db_config, logger):
 
 
 async def db_writer_worker(queue, db_config, batch_size, logger):
-    batch_data = []
+    telemetry_batch = []
 
     conn = psycopg2.connect(**db_config)
     logger.info("Database background writer started.")
 
-    insert_query = """
+    insert_telemetry_query = """
         INSERT INTO simulation_telemetry (
             time, out_temperature_c, out_wind_speed_m_s, out_wind_direction_deg, 
             out_sun_radiation_w_m2, out_sun_altitude_deg, out_sun_azimuth_deg, out_co2_ppm,
             sys_electricity_price, sys_gas_price, sys_pv_yield_kw, sys_cop_heating, sys_cop_cooling,
-            room_temperatures_c, room_co2_ppm
+            room_temperatures_c, room_co2_ppm, room_q_hvac_w, room_q_hvac_perc, room_v_hvac_m3_s
         ) VALUES %s
+    """
+
+    upsert_forecast_query = """
+        INSERT INTO mpc_forecast (time, planned_q_w, planned_v_m3_s)
+        VALUES %s
+        ON CONFLICT (time) DO UPDATE SET
+            planned_q_w = EXCLUDED.planned_q_w,
+            planned_v_m3_s = EXCLUDED.planned_v_m3_s;
     """
 
     try:
@@ -103,7 +124,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                 queue.task_done()
                 continue
 
-            batch_data.append(
+            telemetry_batch.append(
                 (
                     item.time,
                     item.out_temperature_c,
@@ -119,18 +140,40 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                     item.sys_cop_heating,
                     item.sys_cop_cooling,
                     Json(item.room_temperatures_c),
-                    Json(item.room_co2_ppm)
+                    Json(item.room_co2_ppm),
+                    Json(item.room_q_hvac_w),
+                    Json(item.room_q_hvac_perc),
+                    Json(item.room_v_hvac_m3_s),
                 )
             )
 
-            if len(batch_data) >= batch_size:
-                await asyncio.to_thread(insert_batch, conn, insert_query, batch_data)
-                batch_data.clear()
+            if item.mpc_forecast:
+                current_horizon_data = [
+                    (f["time"], Json(f["q_w"]), Json(f["v_m3_s"]))
+                    for f in item.mpc_forecast
+                ]
+                logger.info(
+                    f"[{item.time}] MPC forecast saved (Horizon: {len(item.mpc_forecast)} steps)"
+                )
+                await asyncio.to_thread(
+                    insert_batch, conn, upsert_forecast_query, current_horizon_data
+                )
+
+            if len(telemetry_batch) >= batch_size:
+                await asyncio.to_thread(
+                    insert_batch, conn, insert_telemetry_query, telemetry_batch
+                )
+                logger.info(
+                    f"[{item.time}] Batch of {batch_size} telemetry steps saved."
+                )
+                telemetry_batch.clear()
 
             queue.task_done()
 
-        if batch_data:
-            await asyncio.to_thread(insert_batch, conn, insert_query, batch_data)
+        if telemetry_batch:
+            await asyncio.to_thread(
+                insert_batch, conn, insert_telemetry_query, telemetry_batch
+            )
 
     except Exception as e:
         logger.error(f"Error in database writer worker: {e}")
@@ -144,6 +187,7 @@ async def main(
     district_config_path,
     weather_path,
     prices_path,
+    hvac_schedule_patch,
     dt_seconds=300,
     batch_size=12,
 ):
@@ -164,6 +208,7 @@ async def main(
         district_config_path=district_config_path,
         weather_path=weather_path,
         prices_path=prices_path,
+        hvac_schedule_patch=hvac_schedule_patch,
         logger=logger,
     )
 
@@ -194,7 +239,8 @@ if __name__ == "__main__":
             "config/district-definition.yml",
             "config/weather-history.csv",
             "config/prices-history.csv",
+            "config/hvac-schedules.json",
             dt_seconds=300,
-            batch_size=12 * 24,
+            batch_size=12,
         )
     )

@@ -17,7 +17,7 @@ class WeatherData:
 
 
 class WeatherService:
-    def __init__(self, weather_path: str, latitude: float, longitude: float):
+    def __init__(self, weather_path, latitude, longitude):
         self.latitude = latitude
         self.longitude = longitude
 
@@ -30,7 +30,7 @@ class WeatherService:
 
         self.weather_history = df.set_index("timestamp").sort_index()
 
-    def get_weather(self, current_time: pd.Timestamp) -> WeatherData:
+    def get_weather(self, current_time):
         idx_after = self.weather_history.index.searchsorted(current_time)
 
         if idx_after == 0:

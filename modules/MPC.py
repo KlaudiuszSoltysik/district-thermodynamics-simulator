@@ -1,373 +1,365 @@
-﻿import numpy as np
+import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-from shared.MongoDbController import MongoDbController
 
 
 class MPC:
-    def __init__(self, pv_farm, heat_pump, num_nodes, district_id_dict):
-        self.horizon_hours = 6
-        self.block_size = 12
+    TEMPERATURE_TOLERANCE_C = 0.2
+    CO2_GENERATION_M3_H_PER_PERSON = 0.025
+    RECALCULATION_INTERVAL_STEPS = 12
+    HORIZON_HOURS = 6
+    STEPS_PER_HOUR = 1
 
-        self.cached_t_plan = None
-        self.cached_v_plan = None
-        self.plan_step_index = 0
+    def __init__(
+        self,
+        pv_farm,
+        heat_pump,
+        num_nodes: int,
+        district_id_dict: dict,
+        schedules_data: dict,
+    ):
+        self.control_steps = self.HORIZON_HOURS * self.STEPS_PER_HOUR
 
-        self.mongodb = MongoDbController()
+        self.cached_q_plan_w = None
+        self.cached_v_plan_m3_s = None
+        self.steps_since_last_recalc = 0
 
         self.pv_farm = pv_farm
         self.heat_pump = heat_pump
         self.num_nodes = num_nodes
-        self.max_heat_pump_powers = heat_pump.max_heat_pump_powers
-        self.min_heat_pump_powers = heat_pump.min_heat_pump_powers
         self.district_id_dict = district_id_dict
 
-        self.target_24h = None
-        self.min_24h = None
-        self.max_24h = None
-        self.is_enabled_24h = None
-        self.set_temperatures_config()
+        self.max_heating_power_w = heat_pump.max_heating_power_w
+        self.min_heating_power_w = heat_pump.max_cooling_power_w
 
-    def set_temperatures_config(self):
-        self.target_24h = np.full((self.num_nodes, 24), 21.0)
-        tolerance_channel = np.full((self.num_nodes, 24), 0.5)
-        self.is_enabled_24h = np.zeros((self.num_nodes, 24))
+        self.target_temp_24h_c = np.full((self.num_nodes, 24), 21.0)
+        self.max_co2_24h_ppm = np.full((self.num_nodes, 24), 1000.0)
+        self.is_occupied_24h = np.zeros((self.num_nodes, 24))
 
-        configs = list(self.mongodb.db["apartments-config"].find({}))
+        self.load_schedules(schedules_data)
 
-        mongo_map = {}
-        for apt in configs:
-            b_id = apt["BuildingId"]
-            a_id = apt["ApartmentId"]
+    def load_schedules(self, schedules_data):
+        for idx in range(self.num_nodes):
+            room_key = self.district_id_dict[idx]
 
-            for room in apt["Rooms"]:
-                r_id = room["_id"]
-                flat_key = f"{b_id}:{a_id}:{r_id}"
-                mongo_map[flat_key] = room["HvacControl"]
+            if room_key in schedules_data:
+                schedule = schedules_data[room_key]
 
-        for idx, full_id in self.district_id_dict.items():
-            if full_id in mongo_map:
-                ctrl = mongo_map[full_id]
-
-                temps = ctrl["Temperatures"]
+                temps = schedule.get("target_temp_c")
                 if temps and len(temps) == 24:
-                    self.target_24h[idx, :] = temps
+                    self.target_temp_24h_c[idx, :] = temps
 
-                tolerance_channel[idx] = ctrl["Tolerance"]
+                co2_limits = schedule.get("max_co2_ppm")
+                if co2_limits:
+                    self.max_co2_24h_ppm[idx, :] = co2_limits
 
-                is_enabled = ctrl["IsEnabled"]
-                if is_enabled and len(is_enabled) == 24:
-                    self.is_enabled_24h[idx, :] = [
-                        1.0 if s else 0.0 for s in is_enabled
-                    ]
+                occupied = schedule.get("is_occupied")
+                if occupied and len(occupied) == 24:
+                    self.is_occupied_24h[idx, :] = occupied
 
-        self.min_24h = self.target_24h - tolerance_channel
-        self.max_24h = self.target_24h + tolerance_channel
+    def get_target_trajectories(self, start_time, dt_seconds, horizon_steps):
+        t_target_horizon_c = np.zeros((horizon_steps, self.num_nodes))
+        co2_max_horizon_ppm = np.zeros((horizon_steps, self.num_nodes))
+        is_occupied_horizon = np.zeros((horizon_steps, self.num_nodes))
 
-    def get_target_trajectories(self, current_time, dt, horizon_steps):
-        T_min_horizon = np.zeros((horizon_steps, self.num_nodes))
-        T_max_horizon = np.zeros((horizon_steps, self.num_nodes))
+        future_time = start_time
 
-        future_time = current_time
         for k in range(horizon_steps):
-            time_float = future_time.hour + (future_time.minute / 60.0)
-            h0 = int(time_float) % 24
-            h1 = (h0 + 1) % 24
-            w = time_float - int(time_float)
-            mu = (1.0 - np.cos(w * np.pi)) / 2.0
+            h0 = future_time.hour
 
-            base_min = self.min_24h[:, h0] * (1.0 - mu) + self.min_24h[:, h1] * mu
-            base_max = self.max_24h[:, h0] * (1.0 - mu) + self.max_24h[:, h1] * mu
+            t_target_horizon_c[k, :] = self.target_temp_24h_c[:, h0]
+            co2_max_horizon_ppm[k, :] = self.max_co2_24h_ppm[:, h0]
+            is_occupied_horizon[k, :] = self.is_occupied_24h[:, h0]
 
-            is_active = self.is_enabled_24h[:, h0] > 0.5
+            future_time += pd.Timedelta(seconds=dt_seconds)
 
-            T_min_horizon[k, :] = np.where(is_active, base_min, 16.0)
-            T_max_horizon[k, :] = np.where(is_active, base_max, 26.0)
-
-            future_time += pd.Timedelta(seconds=dt)
-
-        return T_min_horizon, T_max_horizon
+        return t_target_horizon_c, co2_max_horizon_ppm, is_occupied_horizon
 
     def cost_function(
         self,
         x_flat,
-        current_T,
-        current_co2,
-        T_min_horizon,
-        T_max_horizon,
-        t_out_forecast,
-        co2_out_forecast,
-        q_env_forecast,
-        is_enabled_forecast,
+        current_t_c,
+        current_co2_ppm,
+        t_target_horizon_c,
+        co2_max_horizon_ppm,
+        is_occupied_horizon,
+        t_out_forecast_c,
+        co2_out_forecast_ppm,
+        q_env_forecast_w,
         thermal_solver,
         co2_solver,
-        dt,
+        dt_seconds,
         horizon_steps,
-        control_steps,
         elec_cost_forecast,
-        gas_cost_forecast,
-        res_yield_forecast,
+        res_yield_forecast_kw,
         cop_heat_forecast,
         cop_cool_forecast,
     ):
-        half_idx = control_steps * self.num_nodes
+        half_idx = self.HORIZON_HOURS * self.num_nodes
 
-        Q_percent_blocked = x_flat[:half_idx].reshape((control_steps, self.num_nodes))
-        V_percent_blocked = x_flat[half_idx:].reshape((control_steps, self.num_nodes))
-
-        Q_watts_blocked = np.where(
-            Q_percent_blocked >= 0,
-            (Q_percent_blocked / 100.0) * self.max_heat_pump_powers,
-            (Q_percent_blocked / 100.0) * self.min_heat_pump_powers,
+        # Decode optimizer state [-100% to 100%] into physical units
+        q_percent_matrix = x_flat[:half_idx].reshape(
+            (self.HORIZON_HOURS, self.num_nodes)
         )
-        V_m3s_blocked = (V_percent_blocked / 100.0) * 0.05
+        v_percent_matrix = x_flat[half_idx:].reshape(
+            (self.HORIZON_HOURS, self.num_nodes)
+        )
 
-        Q_hvac_matrix = np.repeat(Q_watts_blocked, self.block_size, axis=0)
-        V_vent_matrix = np.repeat(V_m3s_blocked, self.block_size, axis=0)
+        q_w_hourly = np.where(
+            q_percent_matrix >= 0,
+            (q_percent_matrix / 100.0) * self.max_heating_power_w,
+            (q_percent_matrix / 100.0) * self.min_heating_power_w,
+        )
 
-        T_sim = np.array(current_T, dtype=float)
-        co2_sim = np.array(current_co2, dtype=float)
+        # Assume max ventilation is 0.05 m^3/s per room (~180 m^3/h)
+        v_m3_s_hourly = (v_percent_matrix / 100.0) * 0.05
+
+        # Expand hourly decisions to standard simulation steps
+        block_size = horizon_steps // self.HORIZON_HOURS
+        q_hvac_matrix_w = np.repeat(q_w_hourly, block_size, axis=0)
+        v_vent_matrix_m3_s = np.repeat(v_m3_s_hourly, block_size, axis=0)
+
+        # Simulation state copies
+        t_sim_c = np.array(current_t_c, dtype=float)
+        co2_sim_ppm = np.array(current_co2_ppm, dtype=float)
         total_penalty = 0.0
 
-        G = thermal_solver.G_temp
-        C = thermal_solver.C
-        G_ext_air = thermal_solver.G_ext_air
-        G_ext_ground = thermal_solver.G_ext_ground
-        T_ground = thermal_solver.T_ground
+        micro_steps = int(np.ceil(dt_seconds / 60.0))
+        micro_dt_s = dt_seconds / micro_steps
 
-        micro_steps = int(np.ceil(dt / 60))
-        micro_dt = dt / micro_steps
-
+        # Fast-forward simulation over the horizon
         for k in range(horizon_steps):
-            Q_hvac = Q_hvac_matrix[k]
-            V_vent = V_vent_matrix[k]
+            q_hvac_w = q_hvac_matrix_w[k]
+            v_vent_m3_s = v_vent_matrix_m3_s[k]
 
-            co2_generation_m3_s = (0.015 / 3600.0) * is_enabled_forecast[k]
+            # 1. CO2 Physics
+            co2_gen_m3_s = (
+                self.CO2_GENERATION_M3_H_PER_PERSON / 3600 * is_occupied_horizon[k]
+            )
 
             for _ in range(micro_steps):
-                co2_mixed = np.dot(co2_solver.G, co2_sim) - (
-                    np.sum(co2_solver.G, axis=1) * co2_sim
+                co2_mixed = np.dot(co2_solver.air_mixing_rate_m3_s, co2_sim_ppm) - (
+                    np.sum(co2_solver.air_mixing_rate_m3_s, axis=1) * co2_sim_ppm
                 )
-                co2_infil = co2_solver.G_ext_air_mix * (co2_out_forecast[k] - co2_sim)
-                co2_vent = V_vent * (co2_out_forecast[k] - co2_sim)
+                co2_infil = co2_solver.infiltration_rate_m3_s * (
+                    co2_out_forecast_ppm[k] - co2_sim_ppm
+                )
+                co2_vent = v_vent_m3_s * (co2_out_forecast_ppm[k] - co2_sim_ppm)
 
-                total_co2 = co2_mixed + co2_infil + co2_vent
-                co2_sim += (total_co2 / co2_solver.V) * micro_dt
-                co2_sim += (co2_generation_m3_s / co2_solver.V) * 1_000_000.0 * micro_dt
+                total_co2_flow = co2_mixed + co2_infil + co2_vent
+                co2_sim_ppm += (total_co2_flow / co2_solver.volumes_m3) * micro_dt_s
+                co2_sim_ppm += (
+                    (co2_gen_m3_s / co2_solver.volumes_m3) * 1_000_000.0 * micro_dt_s
+                )
+                co2_sim_ppm = np.maximum(co2_sim_ppm, 400.0)
 
-            co2_sim = np.maximum(co2_sim, 400.0)
-
-            Q_inter = np.dot(G, T_sim) - (np.sum(G, axis=1) * T_sim)
-            Q_air = G_ext_air * (t_out_forecast[k] - T_sim)
-            Q_ground = G_ext_ground * (T_ground - T_sim)
-            Q_vent = V_vent * 1200.0 * (1.0 - 0.8) * (t_out_forecast[k] - T_sim)
-
-            total_Q = Q_inter + Q_air + Q_ground + Q_vent + q_env_forecast[k] + Q_hvac
-            T_sim += (total_Q / C) * dt
-
-            # penalty for temperatures outside band
-            below_min = np.maximum(0, T_min_horizon[k] - T_sim)
-            above_max = np.maximum(0, T_sim - T_max_horizon[k])
-            total_penalty += (
-                np.sum(below_min) * 10000.0 + np.sum(below_min**2) * 50000.0
+            # 2. Thermal Physics
+            q_inter_w = np.dot(thermal_solver.thermal_conductance_w_k, t_sim_c) - (
+                np.sum(thermal_solver.thermal_conductance_w_k, axis=1) * t_sim_c
             )
-            total_penalty += (
-                np.sum(above_max) * 10000.0 + np.sum(above_max**2) * 50000.0
+            q_air_w = thermal_solver.ext_air_conductance_w_k * (
+                t_out_forecast_c[k] - t_sim_c
+            )
+            q_ground_w = thermal_solver.ext_ground_conductance_w_k * (
+                thermal_solver.ground_temperature_c - t_sim_c
+            )
+            q_vent_w = (
+                v_vent_m3_s * 1200.0 * (1.0 - 0.8) * (t_out_forecast_c[k] - t_sim_c)
+            )  # 0.8 is HRV efficiency
+
+            total_q_w = (
+                q_inter_w
+                + q_air_w
+                + q_ground_w
+                + q_vent_w
+                + q_env_forecast_w[k]
+                + q_hvac_w
+            )
+            t_sim_c += (total_q_w / thermal_solver.heat_capacity_j_k) * dt_seconds
+
+            # 3. Penalties & Costs
+            # Temperature comfort (penalize aggressively if outside target +- 0.2)
+            below_min = np.maximum(
+                0, (t_target_horizon_c[k] - self.TEMPERATURE_TOLERANCE_C) - t_sim_c
+            )
+            above_max = np.maximum(
+                0, t_sim_c - (t_target_horizon_c[k] + self.TEMPERATURE_TOLERANCE_C)
             )
 
-            # penalty for freezing floor
-            floor_freezing_penalty = np.maximum(0, 19.0 - T_sim)
-            total_penalty += np.sum(floor_freezing_penalty) * 100000.0
+            # If occupied, enforce strictly. If not, allow setback drift (multiply penalty by occupation mask)
+            enforcement_weight = np.where(is_occupied_horizon[k] > 0.5, 1.0, 0.05)
 
-            # penalty for exceeding co2 level
-            co2_suffocation = np.maximum(0, co2_sim - 1000.0)
-            total_penalty += (
-                np.sum(co2_suffocation) * 1000.0 + np.sum(co2_suffocation**2) * 5000.0
-            )
+            total_penalty += np.sum((below_min**2) * 5000.0 * enforcement_weight)
+            total_penalty += np.sum((above_max**2) * 5000.0 * enforcement_weight)
 
-            # penalty for energy expenses
-            Q_heating = np.maximum(0, Q_hvac)
-            Q_cooling = np.maximum(0, -Q_hvac)
+            # CO2 comfort (Penalize only if exceeding max allowed PPM)
+            co2_violation = np.maximum(0, co2_sim_ppm - co2_max_horizon_ppm[k])
+            total_penalty += np.sum((co2_violation**2) * 100.0)
 
-            V_power_watts = V_vent * 1000.0
+            # Financial Cost (Minimize Grid Energy Bill)
+            q_heating_w = np.maximum(0, q_hvac_w)
+            q_cooling_w = np.maximum(0, -q_hvac_w)
+            v_power_w = v_vent_m3_s * 1000.0  # ~1kW per 1 m3/s fan power
 
-            heat_elec_demand = np.sum(Q_heating) / cop_heat_forecast[k]
-            cool_elec_demand = np.sum(Q_cooling) / cop_cool_forecast[k]
-            vent_elec_demand = np.sum(V_power_watts)
+            heat_elec_demand_kw = (np.sum(q_heating_w) / cop_heat_forecast[k]) / 1000.0
+            cool_elec_demand_kw = (np.sum(q_cooling_w) / cop_cool_forecast[k]) / 1000.0
+            vent_elec_demand_kw = np.sum(v_power_w) / 1000.0
 
             total_elec_demand_kw = (
-                heat_elec_demand + cool_elec_demand + vent_elec_demand
-            ) / 1000.0
+                heat_elec_demand_kw + cool_elec_demand_kw + vent_elec_demand_kw
+            )
+            grid_buy_kw = np.maximum(0, total_elec_demand_kw - res_yield_forecast_kw[k])
 
-            grid_buy_kw = np.maximum(0, total_elec_demand_kw - res_yield_forecast[k])
+            step_financial_cost = grid_buy_kw * elec_cost_forecast[k]
 
-            step_cost = grid_buy_kw * elec_cost_forecast[k]
-
-            # Jeśli w przyszłości dodasz "Q_gas" jako osobną zmienną, tutaj dodasz:
-            # step_cost += (np.sum(Q_gas)/1000.0 / 0.95) * gas_cost_for[k]
-
-            total_penalty += step_cost * 50.0
-
-            # penalty for using hvac
-            total_penalty += np.sum(np.abs(Q_hvac)) * 0.01
-            total_penalty += np.sum(V_vent) * 100.0
-
-        # penalty for low stability
-        delta_q_frac = np.diff(Q_percent_blocked, axis=0) / 100.0
-        delta_v_frac = np.diff(V_percent_blocked, axis=0) / 100.0
-        total_penalty += np.sum(delta_q_frac**2) * 5000.0
-        total_penalty += np.sum(delta_v_frac**2) * 5000.0
-
-        # penalty for exceeding maximum power change
-        illegal_jumps = np.maximum(0, np.abs(delta_q_frac) - 0.15)
-        total_penalty += np.sum(illegal_jumps) * 10000000.0
+            # Add real money cost to penalty (weight controls economy vs comfort)
+            total_penalty += step_financial_cost * 100.0
 
         return total_penalty
 
     def step(
         self,
         current_time,
-        dt,
+        dt_seconds,
         weather_solver,
         thermal_solver,
         co2_solver,
         weather_service,
         energy_service,
     ):
-        horizon_steps = int((self.horizon_hours * 3600) / dt)
-        needs_recalc = False
+        horizon_steps = int((self.HORIZON_HOURS * 3600) / dt_seconds)
 
-        if self.cached_t_plan is None:
+        needs_recalc = False
+        if (
+            self.cached_q_plan_w is None
+            or self.steps_since_last_recalc >= self.RECALCULATION_INTERVAL_STEPS
+        ):
             needs_recalc = True
-        elif self.plan_step_index >= 12:
-            needs_recalc = True
+
+        forecast_data = None
 
         if needs_recalc:
-            t_out_forecast = np.zeros(horizon_steps)
-            co2_out_forecast = np.zeros(horizon_steps)
-            q_env_forecast = np.zeros((horizon_steps, self.num_nodes))
-            is_enabled_forecast = np.zeros((horizon_steps, self.num_nodes))
+            t_out_forecast_c = np.zeros(horizon_steps)
+            co2_out_forecast_ppm = np.zeros(horizon_steps)
+            q_env_forecast_w = np.zeros((horizon_steps, self.num_nodes))
 
             elec_cost_forecast = np.zeros(horizon_steps)
-            gas_cost_forecast = np.zeros(horizon_steps)
-            res_yield_forecast = np.zeros(horizon_steps)
+            res_yield_forecast_kw = np.zeros(horizon_steps)
             cop_heat_forecast = np.zeros(horizon_steps)
             cop_cool_forecast = np.zeros(horizon_steps)
 
             future_time = current_time
-            T_frozen_for_prediction = np.copy(thermal_solver.T)
+            t_frozen_for_prediction = np.copy(thermal_solver.T)
 
             for k in range(horizon_steps):
                 w = weather_service.get_weather(future_time)
-                t_out_forecast[k] = w["temperature"]
-                co2_out_forecast[k] = w["co2"]
+                t_out_forecast_c[k] = w.temperature_c
+                co2_out_forecast_ppm[k] = w.co2_ppm
 
                 q_env = weather_solver.calculate_environmental_gains(
-                    w["sun_radiation"],
-                    w["sun_altitude"],
-                    w["sun_azimuth"],
-                    w["wind_speed"],
-                    w["wind_direction"],
-                    w["temperature"],
-                    T_frozen_for_prediction,
+                    w.sun_radiation_w_m2,
+                    w.sun_altitude_deg,
+                    w.sun_azimuth_deg,
+                    w.wind_speed_m_s,
+                    w.wind_direction_deg,
+                    w.temperature_c,
+                    t_frozen_for_prediction,
                 )
-                q_env_forecast[k, :] = q_env
-
-                time_float = future_time.hour + (future_time.minute / 60.0)
-                current_h = int(time_float) % 24
-                is_enabled_forecast[k, :] = co2_solver.is_enabled_mask[:, current_h]
+                q_env_forecast_w[k, :] = q_env
 
                 costs = energy_service.get_effective_costs(
                     future_time, self.pv_farm, self.heat_pump, w
                 )
+                elec_cost_forecast[k] = costs.electricity_price_per_unit
+                res_yield_forecast_kw[k] = costs.pv_yield_kw
+                cop_heat_forecast[k] = costs.cop_heating
+                cop_cool_forecast[k] = costs.cop_cooling
 
-                elec_cost_forecast[k] = costs["electricity_price"]
-                gas_cost_forecast[k] = costs["gas_price"]
-                res_yield_forecast[k] = costs["pv_farm_yield"]
-                cop_heat_forecast[k] = costs["cop_heating"]
-                cop_cool_forecast[k] = costs["cop_cooling"]
+                future_time += pd.Timedelta(seconds=dt_seconds)
 
-                future_time += pd.Timedelta(seconds=dt)
-
-            T_min_horizon, T_max_horizon = self.get_target_trajectories(
-                current_time, dt, horizon_steps
+            t_target_horizon_c, co2_max_horizon_ppm, is_occupied_horizon = (
+                self.get_target_trajectories(current_time, dt_seconds, horizon_steps)
             )
 
-            control_steps = horizon_steps // self.block_size
+            num_decisions = self.control_steps * self.num_nodes
 
-            bounds_q = [
-                (-100.0, 100.0)
-                for _ in range(control_steps)
-                for i in range(self.num_nodes)
-            ]
-            bounds_v = [
-                (0.0, 100.0)
-                for _ in range(control_steps)
-                for i in range(self.num_nodes)
-            ]
+            bounds_q = [(-100.0, 100.0) for _ in range(num_decisions)]
+            bounds_v = [(0.0, 100.0) for _ in range(num_decisions)]
             bounds = bounds_q + bounds_v
 
-            initial_guess = np.zeros(control_steps * self.num_nodes * 2)
+            initial_guess = np.zeros(num_decisions * 2)
 
             res = minimize(
                 self.cost_function,
                 initial_guess,
                 args=(
                     thermal_solver.T,
-                    co2_solver.co2,
-                    T_min_horizon,
-                    T_max_horizon,
-                    t_out_forecast,
-                    co2_out_forecast,
-                    q_env_forecast,
-                    is_enabled_forecast,
+                    co2_solver.co2_ppm,
+                    t_target_horizon_c,
+                    co2_max_horizon_ppm,
+                    is_occupied_horizon,
+                    t_out_forecast_c,
+                    co2_out_forecast_ppm,
+                    q_env_forecast_w,
                     thermal_solver,
                     co2_solver,
-                    dt,
+                    dt_seconds,
                     horizon_steps,
-                    control_steps,
                     elec_cost_forecast,
-                    gas_cost_forecast,
-                    res_yield_forecast,
+                    res_yield_forecast_kw,
                     cop_heat_forecast,
                     cop_cool_forecast,
                 ),
                 method="L-BFGS-B",
                 bounds=bounds,
-                options={
-                    "maxiter": 1,  # 10
-                    "ftol": 1e-3,
-                    "eps": 2.0,
-                    "disp": False,
-                },
+                options={"maxiter": 10, "ftol": 1e-3, "disp": False},
             )
 
-            half_idx = control_steps * self.num_nodes
+            half_idx = self.HORIZON_HOURS * self.num_nodes
             optimal_q_percent = res.x[:half_idx].reshape(
-                (control_steps, self.num_nodes)
+                (self.HORIZON_HOURS, self.num_nodes)
             )
             optimal_v_percent = res.x[half_idx:].reshape(
-                (control_steps, self.num_nodes)
+                (self.HORIZON_HOURS, self.num_nodes)
             )
 
-            optimal_q_watts = np.where(
+            optimal_q_w = np.where(
                 optimal_q_percent >= 0,
-                (optimal_q_percent / 100.0) * self.max_heat_pump_powers,
-                (optimal_q_percent / 100.0) * self.min_heat_pump_powers,
+                (optimal_q_percent / 100.0) * self.max_heating_power_w,
+                (optimal_q_percent / 100.0) * self.min_heating_power_w,
             )
-            optimal_v_m3s = (optimal_v_percent / 100.0) * 0.05
+            optimal_v_m3_s = (optimal_v_percent / 100.0) * 0.05
 
-            self.cached_t_plan = np.repeat(optimal_q_watts, self.block_size, axis=0)
-            self.cached_v_plan = np.repeat(optimal_v_m3s, self.block_size, axis=0)
-            self.plan_step_index = 0
+            block_size = horizon_steps // self.control_steps
 
-        if self.plan_step_index < len(self.cached_t_plan):
-            current_optimal_q = self.cached_t_plan[self.plan_step_index, :]
-            current_optimal_v = self.cached_v_plan[self.plan_step_index, :]
+            self.cached_q_plan_w = np.repeat(optimal_q_w, block_size, axis=0)
+            self.cached_v_plan_m3_s = np.repeat(optimal_v_m3_s, block_size, axis=0)
+
+            forecast_data = []
+            future_t = current_time
+            for k in range(horizon_steps):
+                q_dict = {
+                    self.district_id_dict[i]: float(self.cached_q_plan_w[k, i])
+                    for i in range(self.num_nodes)
+                }
+                v_dict = {
+                    self.district_id_dict[i]: float(self.cached_v_plan_m3_s[k, i])
+                    for i in range(self.num_nodes)
+                }
+                forecast_data.append(
+                    {"time": future_t.isoformat(), "q_w": q_dict, "v_m3_s": v_dict}
+                )
+                future_t += pd.Timedelta(seconds=dt_seconds)
+
+            self.steps_since_last_recalc = 0
+
+        if self.steps_since_last_recalc < len(self.cached_q_plan_w):  # type: ignore
+            current_q_w = self.cached_q_plan_w[self.steps_since_last_recalc, :]  # type: ignore
+            current_v_m3_s = self.cached_v_plan_m3_s[self.steps_since_last_recalc, :]  # type: ignore
         else:
-            current_optimal_q = np.zeros(self.num_nodes)
-            current_optimal_v = np.zeros(self.num_nodes)
+            current_q_w = np.zeros(self.num_nodes)
+            current_v_m3_s = np.zeros(self.num_nodes)
 
-        self.plan_step_index += 1
+        self.steps_since_last_recalc += 1
 
-        return current_optimal_q, current_optimal_v
+        return current_q_w, current_v_m3_s, forecast_data

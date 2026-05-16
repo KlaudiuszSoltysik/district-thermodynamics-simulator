@@ -2,15 +2,15 @@
 class HeatPump:
     def __init__(
         self,
-        max_heating_powers,
-        max_cooling_powers,
+        max_heating_power_w,
+        max_cooling_power_w,
         base_cop=3.0,
         temp_modifier=0.1,
         min_cop=1.0,
         eer=3.0,
     ):
-        self.max_heating_powers = max_heating_powers
-        self.max_cooling_powers = max_cooling_powers
+        self.max_heating_power_w = max_heating_power_w
+        self.max_cooling_power_w = max_cooling_power_w
         self.base_cop = base_cop
         self.temp_modifier = temp_modifier
         self.min_cop = min_cop

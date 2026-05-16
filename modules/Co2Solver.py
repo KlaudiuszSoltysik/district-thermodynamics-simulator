@@ -2,6 +2,8 @@
 
 
 class Co2Solver:
+    CO2_GENERATION_M3_H_PER_PERSON = 0.025
+
     def __init__(
         self,
         air_mixing_rate_m3_s,
@@ -9,10 +11,12 @@ class Co2Solver:
         infiltration_rate_m3_s,
         num_nodes,
         index_to_id,
+        schedules_data,
     ):
         self.air_mixing_rate_m3_s = air_mixing_rate_m3_s
-        self.volumes_m3 = volumes_m3
         self.infiltration_rate_m3_s = infiltration_rate_m3_s
+
+        self.volumes_m3 = volumes_m3
         self.num_nodes = num_nodes
         self.index_to_id = index_to_id
 
@@ -20,21 +24,46 @@ class Co2Solver:
 
         self.occupancy_mask = np.zeros((self.num_nodes, 24))
 
-        self.set_occupancy_schedule()
+        self.set_occupancy_schedule(schedules_data)
 
-    def set_occupancy_schedule(self):
-        # TODO: Implement parsing from local YAML/JSON config later
-        return
+    def set_occupancy_schedule(self, schedules_data):
+        for idx in range(self.num_nodes):
+            room_key = self.index_to_id[idx]
+
+            if room_key in schedules_data:
+                occ_24h = schedules_data[room_key].get("is_occupied", [0] * 24)
+                self.occupancy_mask[idx, :] = occ_24h
 
     def step(self, current_time, dt_seconds, outside_co2_ppm, v_hvac_m3_s):
-
         current_h = current_time.hour
         current_mask = self.occupancy_mask[:, current_h]
 
-        steps = int(np.ceil(dt_seconds / 60.0))
+        flows_out_m3_s = (
+            np.sum(self.air_mixing_rate_m3_s, axis=1)
+            + self.infiltration_rate_m3_s
+            + v_hvac_m3_s
+        )
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ach_per_second = np.where(
+                self.volumes_m3 > 0, flows_out_m3_s / self.volumes_m3, 0
+            )
+
+        max_ach_per_second = np.max(ach_per_second)
+
+        if max_ach_per_second > 0:
+            safe_dt = 0.5 / max_ach_per_second
+        else:
+            safe_dt = 60.0
+
+        safe_dt = min(safe_dt, 60.0, dt_seconds)
+
+        steps = int(np.ceil(dt_seconds / safe_dt))
         micro_dt_s = dt_seconds / steps
 
-        co2_generation_m3_s = (0.015 / 3600.0) * current_mask
+        co2_generation_m3_s = (
+            self.CO2_GENERATION_M3_H_PER_PERSON / 3600.0
+        ) * current_mask
 
         for _ in range(steps):
             co2_mixed_m3_s_ppm = np.dot(self.air_mixing_rate_m3_s, self.co2_ppm) - (
@@ -57,6 +86,6 @@ class Co2Solver:
                 (co2_generation_m3_s / self.volumes_m3) * 1000000.0 * micro_dt_s
             )
 
-        self.co2_ppm = np.maximum(self.co2_ppm, 400.0)
+            self.co2_ppm = np.maximum(self.co2_ppm, 400.0)
 
         return np.round(self.co2_ppm).astype(int)

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Dict
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -10,7 +10,7 @@ from modules.Co2Solver import Co2Solver
 from modules.DistrictConfigParser import DistrictModelParser
 from modules.EnergyService import EnergyService
 from modules.HeatPump import HeatPump
-# from modules.MPC import MPC
+from modules.MPC import MPC
 from modules.PVFarm import PVFarm
 from modules.ThermalSolver import ThermalSolver
 from modules.WeatherService import WeatherService
@@ -34,21 +34,31 @@ class SimulationStep:
     sys_cop_cooling: float
     room_temperatures_c: Dict[str, float]
     room_co2_ppm: Dict[str, int]
+    room_q_hvac_w: Dict[str, float]
+    room_q_hvac_perc: Dict[str, float]
+    room_v_hvac_m3_s: Dict[str, float]
+    mpc_forecast: Optional[List[Dict[str, Any]]] = None
 
 
 class Simulator:
     START_TIMESTAMP = pd.Timestamp("2024-12-31 23:00+00:00")
 
-    def __init__(self, district_config_path, weather_path, prices_path, logger):
+    def __init__(
+        self,
+        district_config_path,
+        weather_path,
+        prices_path,
+        hvac_schedule_patch,
+        logger,
+    ):
         self.logger = logger
         self.logger.info("Initializing DistrictSimulation instance...")
 
-        try:
-            with open(district_config_path, "r", encoding="utf-8") as f:
-                district_data = yaml.safe_load(f)
-        except Exception as e:
-            self.logger.error(f"Failed to load YAML config: {e}.")
-            raise
+        with open(district_config_path, "r", encoding="utf-8") as f:
+            district_data = yaml.safe_load(f)
+
+        with open(hvac_schedule_patch, "r", encoding="utf-8") as f:
+            hvac_schedule = yaml.safe_load(f)
 
         parser = DistrictModelParser(district_data)
         parser.parse()
@@ -76,12 +86,13 @@ class Simulator:
             parser.external_connections, parser.standards, self.num_nodes
         )
 
-        # self.mpc = MPC(
-        #     self.pv_farm,
-        #     self.heat_pump,
-        #     self.num_nodes,
-        #     self.index_to_id,
-        # )
+        self.mpc = MPC(
+            self.pv_farm,
+            self.heat_pump,
+            self.num_nodes,
+            self.index_to_id,
+            hvac_schedule,
+        )
 
         self.thermal_solver = ThermalSolver(
             parser.thermal_conductance_w_k,
@@ -98,11 +109,10 @@ class Simulator:
             parser.infiltration_rate_m3_s,
             self.num_nodes,
             self.index_to_id,
+            hvac_schedule,
         )
 
-        #
         #         self.gas_boiler = GasBoiler()
-        #
         #
         #         self.metering_service = MeteringService(
         #             parser.A, self.num_nodes, self.index_to_id
@@ -121,7 +131,7 @@ class Simulator:
             self.current_time, self.pv_farm, self.heat_pump, weather
         )
 
-        q_env = self.weather_solver.calculate_environmental_gains(
+        q_env_w = self.weather_solver.calculate_environmental_gains(
             weather.sun_radiation_w_m2,
             weather.sun_altitude_deg,
             weather.sun_azimuth_deg,
@@ -131,61 +141,57 @@ class Simulator:
             self.thermal_solver.T,
         )
 
-        # q_hvac, v_hvac = self.mpc.step(
-        #     self.current_time,
-        #     dt,
-        #     self.weather_solver,
-        #     self.thermal_solver,
-        #     self.co2_solver,
-        #     self.weather_service,
-        #     self.energy_service,
-        # )
-
-        q_hvac = np.zeros(self.co2_solver.num_nodes)
-        v_hvac = np.zeros(self.co2_solver.num_nodes)
-
-        q_total = q_env + q_hvac
-
-        temperatures_array = self.thermal_solver.step(
-            dt, weather.temperature_c, q_total, v_hvac
+        q_hvac_w, v_hvac_m3_s, forecast_data = self.mpc.step(
+            self.current_time,
+            dt,
+            self.weather_solver,
+            self.thermal_solver,
+            self.co2_solver,
+            self.weather_service,
+            self.energy_service,
         )
 
-        co2_array = self.co2_solver.step(self.current_time, dt, weather.co2_ppm, v_hvac)
-        #
+        q_total_w = q_env_w + q_hvac_w
+
+        temperatures_array_c = self.thermal_solver.step(
+            dt, weather.temperature_c, q_total_w, v_hvac_m3_s
+        )
+
+        co2_array_ppm = self.co2_solver.step(
+            self.current_time, dt, weather.co2_ppm, v_hvac_m3_s
+        )
+
         #         self.metering_service.update_meters(
         #             self.current_time, dt, energy_costs, q_hvac, v_hvac
         #         )
         #
         #         energy_clean = {k: round(v, 2) for k, v in energy_costs.items()}
-        #
-        #         room_hvac_q = {
-        #             self.index_to_id[i]: round(float(q_hvac[i]), 2)
-        #             for i in range(self.num_nodes)
-        #         }
-        #
-        #         denominators = np.where(
-        #             q_hvac >= 0, self.mpc.max_heat_pump_powers, self.mpc.min_heat_pump_powers
-        #         )
-        #         q_percentage = (q_hvac / denominators) * 100.0
-        #         room_heatings = {
-        #             self.index_to_id[i]: round(float(q_percentage[i]), 2)
-        #             for i in range(self.num_nodes)
-        #         }
-        #
-        #         room_hvac_v = {
-        #             self.index_to_id[i]: round(float(v_hvac[i] * 3600.0), 2)
-        #             for i in range(self.num_nodes)
-        #         }
+
+        room_q_w = {
+            self.index_to_id[i]: float(q_hvac_w[i]) for i in range(self.num_nodes)
+        }
+
+        denominators = np.where(
+            q_hvac_w >= 0, self.mpc.max_heating_power_w, self.mpc.min_heating_power_w
+        )
+        q_hvac_perc = (q_hvac_w / denominators) * 100.0
+        room_q_perc = {
+            self.index_to_id[i]: float(q_hvac_perc[i]) for i in range(self.num_nodes)
+        }
+
+        room_v_m3_s = {
+            self.index_to_id[i]: float(v_hvac_m3_s[i]) for i in range(self.num_nodes)
+        }
 
         self.simulation_time = self.current_time
 
         room_temps = {
-            self.index_to_id[i]: round(float(temperatures_array[i]), 2)
+            self.index_to_id[i]: round(float(temperatures_array_c[i]), 2)
             for i in range(self.num_nodes)
         }
 
         room_co2 = {
-            self.index_to_id[i]: int(co2_array[i]) for i in range(self.num_nodes)
+            self.index_to_id[i]: int(co2_array_ppm[i]) for i in range(self.num_nodes)
         }
 
         self.current_time += timedelta(seconds=dt)
@@ -205,5 +211,9 @@ class Simulator:
             sys_cop_heating=energy_costs.cop_heating,
             sys_cop_cooling=energy_costs.cop_cooling,
             room_temperatures_c=room_temps,
-            room_co2_ppm=room_co2
+            room_co2_ppm=room_co2,
+            room_q_hvac_w=room_q_w,
+            room_q_hvac_perc=room_q_perc,
+            room_v_hvac_m3_s=room_v_m3_s,
+            mpc_forecast=forecast_data,
         )
