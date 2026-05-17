@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from modules.MeteringService import MeteringService
 from modules.Co2Solver import Co2Solver
 from modules.DistrictConfigParser import DistrictModelParser
 from modules.EnergyService import EnergyService
@@ -37,6 +38,7 @@ class SimulationStep:
     room_q_hvac_w: Dict[str, float]
     room_q_hvac_perc: Dict[str, float]
     room_v_hvac_m3_s: Dict[str, float]
+    meter_readings: Dict[str, Dict[str, Any]]
     mpc_forecast: Optional[List[Dict[str, Any]]] = None
 
 
@@ -112,11 +114,9 @@ class Simulator:
             hvac_schedule,
         )
 
-        #         self.gas_boiler = GasBoiler()
-        #
-        #         self.metering_service = MeteringService(
-        #             parser.A, self.num_nodes, self.index_to_id
-        #         )
+        self.metering_service = MeteringService(self.num_nodes, self.index_to_id)
+
+        # self.gas_boiler = GasBoiler()
 
         self.logger.info("Simulation configured.")
 
@@ -153,6 +153,11 @@ class Simulator:
 
         q_total_w = q_env_w + q_hvac_w
 
+        self.metering_service.update_meters(dt, energy_costs, q_hvac_w, v_hvac_m3_s)
+        meter_readings = self.metering_service.get_meter_readings()
+
+        self.simulation_time = self.current_time
+
         temperatures_array_c = self.thermal_solver.step(
             dt, weather.temperature_c, q_total_w, v_hvac_m3_s
         )
@@ -161,11 +166,14 @@ class Simulator:
             self.current_time, dt, weather.co2_ppm, v_hvac_m3_s
         )
 
-        #         self.metering_service.update_meters(
-        #             self.current_time, dt, energy_costs, q_hvac, v_hvac
-        #         )
-        #
-        #         energy_clean = {k: round(v, 2) for k, v in energy_costs.items()}
+        room_temps = {
+            self.index_to_id[i]: round(float(temperatures_array_c[i]), 2)
+            for i in range(self.num_nodes)
+        }
+
+        room_co2 = {
+            self.index_to_id[i]: int(co2_array_ppm[i]) for i in range(self.num_nodes)
+        }
 
         room_q_w = {
             self.index_to_id[i]: float(q_hvac_w[i]) for i in range(self.num_nodes)
@@ -183,17 +191,6 @@ class Simulator:
             self.index_to_id[i]: float(v_hvac_m3_s[i]) for i in range(self.num_nodes)
         }
 
-        self.simulation_time = self.current_time
-
-        room_temps = {
-            self.index_to_id[i]: round(float(temperatures_array_c[i]), 2)
-            for i in range(self.num_nodes)
-        }
-
-        room_co2 = {
-            self.index_to_id[i]: int(co2_array_ppm[i]) for i in range(self.num_nodes)
-        }
-
         self.current_time += timedelta(seconds=dt)
 
         return SimulationStep(
@@ -205,8 +202,8 @@ class Simulator:
             out_sun_altitude_deg=weather.sun_altitude_deg,
             out_sun_azimuth_deg=weather.sun_azimuth_deg,
             out_co2_ppm=weather.co2_ppm,
-            sys_electricity_price=energy_costs.electricity_price_per_unit,
-            sys_gas_price=energy_costs.gas_price_per_unit,
+            sys_electricity_price=energy_costs.electricity_price_eur_per_mwh,
+            sys_gas_price=energy_costs.gas_price_eur_per_mwh,
             sys_pv_yield_kw=energy_costs.pv_yield_kw,
             sys_cop_heating=energy_costs.cop_heating,
             sys_cop_cooling=energy_costs.cop_cooling,
@@ -215,5 +212,6 @@ class Simulator:
             room_q_hvac_w=room_q_w,
             room_q_hvac_perc=room_q_perc,
             room_v_hvac_m3_s=room_v_m3_s,
+            meter_readings=meter_readings,
             mpc_forecast=forecast_data,
         )

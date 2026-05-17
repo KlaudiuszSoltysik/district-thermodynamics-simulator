@@ -67,7 +67,8 @@ def reset_database(db_config, logger):
                 room_co2_ppm JSONB,
                 room_q_hvac_w JSONB,
                 room_q_hvac_perc JSONB,
-                room_v_hvac_m3_s JSONB
+                room_v_hvac_m3_s JSONB,
+                meter_readings JSONB
             );
         """)
         cursor.execute("SELECT create_hypertable('simulation_telemetry', 'time');")
@@ -103,7 +104,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
             time, out_temperature_c, out_wind_speed_m_s, out_wind_direction_deg, 
             out_sun_radiation_w_m2, out_sun_altitude_deg, out_sun_azimuth_deg, out_co2_ppm,
             sys_electricity_price, sys_gas_price, sys_pv_yield_kw, sys_cop_heating, sys_cop_cooling,
-            room_temperatures_c, room_co2_ppm, room_q_hvac_w, room_q_hvac_perc, room_v_hvac_m3_s
+            room_temperatures_c, room_co2_ppm, room_q_hvac_w, room_q_hvac_perc, room_v_hvac_m3_s, meter_readings
         ) VALUES %s
     """
 
@@ -150,6 +151,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                     Json(item.room_q_hvac_w),
                     Json(item.room_q_hvac_perc),
                     Json(item.room_v_hvac_m3_s),
+                    Json(item.meter_readings),
                 )
             )
 

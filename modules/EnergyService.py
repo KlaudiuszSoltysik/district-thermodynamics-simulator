@@ -5,8 +5,8 @@ import pandas as pd
 
 @dataclass
 class EnergyState:
-    electricity_price_per_unit: float
-    gas_price_per_unit: float
+    electricity_price_eur_per_mwh: float
+    gas_price_eur_per_mwh: float
     pv_yield_kw: float
     cop_heating: float
     cop_cooling: float
@@ -37,8 +37,8 @@ class EnergyService:
         gas_price = float(self.prices_history.iloc[idx_after]["gas_price"])
 
         return EnergyState(
-            electricity_price_per_unit=electricity_price,
-            gas_price_per_unit=gas_price,
+            electricity_price_eur_per_mwh=electricity_price,
+            gas_price_eur_per_mwh=gas_price,
             pv_yield_kw=pv_yield_kw,
             cop_heating=cop_heating,
             cop_cooling=cop_cooling,
