@@ -66,7 +66,7 @@ class MPC:
                     self.is_occupied_24h[idx, :] = occupied
 
     def get_target_trajectories(self, start_time, dt_seconds, horizon_steps):
-        t_target_horizon_c = np.zeros((horizon_steps, self.num_nodes))
+        temperature_target_horizon_c = np.zeros((horizon_steps, self.num_nodes))
         co2_max_horizon_ppm = np.zeros((horizon_steps, self.num_nodes))
         is_occupied_horizon = np.zeros((horizon_steps, self.num_nodes))
 
@@ -75,13 +75,13 @@ class MPC:
         for k in range(horizon_steps):
             h0 = future_time.hour
 
-            t_target_horizon_c[k, :] = self.target_temp_24h_c[:, h0]
+            temperature_target_horizon_c[k, :] = self.target_temp_24h_c[:, h0]
             co2_max_horizon_ppm[k, :] = self.max_co2_24h_ppm[:, h0]
             is_occupied_horizon[k, :] = self.is_occupied_24h[:, h0]
 
             future_time += pd.Timedelta(seconds=dt_seconds)
 
-        return t_target_horizon_c, co2_max_horizon_ppm, is_occupied_horizon
+        return temperature_target_horizon_c, co2_max_horizon_ppm, is_occupied_horizon
 
     def step(
         self,
@@ -119,20 +119,20 @@ class MPC:
                 current_q_w = np.zeros(self.num_nodes)
                 current_v_m3_s = np.zeros(self.num_nodes)
 
-            t_out_forecast_c = np.zeros(horizon_steps)
+            temperature_out_forecast_c = np.zeros(horizon_steps)
             co2_out_forecast_ppm = np.zeros(horizon_steps)
             q_env_forecast_w = np.zeros((horizon_steps, self.num_nodes))
-            elec_cost_forecast = np.zeros(horizon_steps)
+            elec_cost_forecast_eur_mwh = np.zeros(horizon_steps)
             res_yield_forecast_kw = np.zeros(horizon_steps)
             cop_heat_forecast = np.zeros(horizon_steps)
             cop_cool_forecast = np.zeros(horizon_steps)
 
             future_time = current_time
-            t_frozen_for_prediction = np.copy(thermal_solver.temperatures_c)
+            temperatures_frozen_for_prediction_c = np.copy(thermal_solver.temperatures_c)
 
             for i in range(horizon_steps):
                 weather = weather_service.get_weather(future_time)
-                t_out_forecast_c[i] = weather.temperature_c
+                temperature_out_forecast_c[i] = weather.temperature_c
                 co2_out_forecast_ppm[i] = weather.co2_ppm
 
                 q_env = weather_solver.calculate_environmental_gains(
@@ -142,29 +142,29 @@ class MPC:
                     weather.wind_speed_m_s,
                     weather.wind_direction_deg,
                     weather.temperature_c,
-                    t_frozen_for_prediction,
+                    temperatures_frozen_for_prediction_c,
                 )
                 q_env_forecast_w[i, :] = q_env
 
-                costs = energy_service.get_effective_costs(
+                energy_costs = energy_service.get_effective_costs(
                     future_time, self.pv_farm, self.heat_pump, weather
                 )
-                elec_cost_forecast[i] = costs.electricity_price_eur_per_mwh
-                res_yield_forecast_kw[i] = costs.pv_yield_kw
-                cop_heat_forecast[i] = costs.cop_heating
-                cop_cool_forecast[i] = costs.cop_cooling
+                elec_cost_forecast_eur_mwh[i] = energy_costs.electricity_price_eur_per_mwh
+                res_yield_forecast_kw[i] = energy_costs.pv_yield_kw
+                cop_heat_forecast[i] = energy_costs.cop_heating
+                cop_cool_forecast[i] = energy_costs.cop_cooling
 
                 future_time += pd.Timedelta(seconds=dt_seconds)
 
-            t_target_horizon_c, co2_max_horizon_ppm, is_occupied_horizon = (
+            temperature_target_horizon_c, co2_max_horizon_ppm, is_occupied_horizon = (
                 self.get_target_trajectories(current_time, dt_seconds, horizon_steps)
             )
 
             num_decisions = self.control_steps * self.num_nodes
 
-            bounds_q = [(-100, 100) for _ in range(num_decisions)]
-            bounds_v = [(0, 100) for _ in range(num_decisions)]
-            bounds = bounds_q + bounds_v
+            bounds_q_perc = [(-100, 100) for _ in range(num_decisions)]
+            bounds_v_perc = [(0, 100) for _ in range(num_decisions)]
+            bounds_perc = bounds_q_perc + bounds_v_perc
 
             initial_guess = np.zeros(num_decisions * 2)
 
@@ -189,13 +189,13 @@ class MPC:
                 np.asarray(current_v_m3_s, dtype=float),
                 float(self.CONTRACTED_POWER_KW),
                 float(self.HRV_EFFICIENCY),
-                t_target_horizon_c.astype(float),
+                temperature_target_horizon_c.astype(float),
                 co2_max_horizon_ppm.astype(float),
                 is_occupied_horizon.astype(float),
-                t_out_forecast_c.astype(float),
+                temperature_out_forecast_c.astype(float),
                 co2_out_forecast_ppm.astype(float),
                 q_env_forecast_w.astype(float),
-                elec_cost_forecast.astype(float),
+                elec_cost_forecast_eur_mwh.astype(float),
                 res_yield_forecast_kw.astype(float),
                 cop_heat_forecast.astype(float),
                 cop_cool_forecast.astype(float),
@@ -214,7 +214,7 @@ class MPC:
                 initial_guess,
                 args=args,
                 method="L-BFGS-B",
-                bounds=bounds,
+                bounds=bounds_perc,
                 options={"maxiter": 10, "ftol": 1e-2, "disp": False},
             )
 
@@ -240,7 +240,7 @@ class MPC:
             self.cached_v_plan_m3_s = np.repeat(optimal_v_m3_s, block_size, axis=0)
 
             forecast_data = []
-            future_t = current_time
+            future_time = current_time
 
             for i in range(horizon_steps):
                 q_dict = {
@@ -252,10 +252,10 @@ class MPC:
                     for i in range(self.num_nodes)
                 }
 
-                t_target_dict = {}
+                temperature_target_dict = {}
                 for i in range(self.num_nodes):
-                    val = t_target_horizon_c[i, i]
-                    t_target_dict[self.district_id_dict[i]] = (
+                    val = temperature_target_horizon_c[i, i]
+                    temperature_target_dict[self.district_id_dict[i]] = (
                         None if np.isnan(val) else float(val)
                     )
 
@@ -271,16 +271,16 @@ class MPC:
 
                 forecast_data.append(
                     {
-                        "time": future_t.isoformat(),
+                        "time": future_time.isoformat(),
                         "q_w": q_dict,
                         "v_m3_s": v_dict,
-                        "t_target_c": t_target_dict,
+                        "t_target_c": temperature_target_dict,
                         "co2_max_ppm": co2_max_dict,
                         "is_occupied": is_occupied_dict,
                     }
                 )
 
-                future_t += pd.Timedelta(seconds=dt_seconds)
+                future_time += pd.Timedelta(seconds=dt_seconds)
 
             self.steps_since_last_recalc = 0
 
@@ -302,22 +302,22 @@ def mpc_cost_function(
     control_steps,
     num_nodes,
     max_heating_power_w,
-    min_heating_power_w,
+    max_cooling_power_w,
     max_vent_power_m3_s,
     co2_generation_rates_m3_s,
     temperature_tolerance_c,
     dt_seconds,
     horizon_steps,
-    current_t_c,
+    current_temperature_c,
     current_co2_ppm,
     current_q_hvac_w,
     current_v_m3_s,
     contracted_power_kw,
     hrv_efficiency,
-    t_target_horizon_c,
+    temperature_target_horizon_c,
     co2_max_horizon_ppm,
     is_occupied_horizon,
-    t_out_forecast_c,
+    temperature_out_forecast_c,
     co2_out_forecast_ppm,
     q_env_forecast_w,
     elec_cost_forecast_eur_mwh,
@@ -336,7 +336,7 @@ def mpc_cost_function(
     half_idx = control_steps * num_nodes
     block_size = horizon_steps // control_steps
 
-    t_sim_c = np.copy(current_t_c)
+    temperature_sim_c = np.copy(current_temperature_c)
     co2_sim_ppm = np.copy(current_co2_ppm)
 
     prev_q_hvac_w = np.copy(current_q_hvac_w)
@@ -366,7 +366,7 @@ def mpc_cost_function(
             if q_perc >= 0:
                 q_hvac_w[j] = (q_perc / 100) * max_heating_power_w[j]
             else:
-                q_hvac_w[j] = (q_perc / 100) * min_heating_power_w[j]
+                q_hvac_w[j] = (q_perc / 100) * max_cooling_power_w[j]
 
             v_vent_m3_s[j] = (v_perc / 100) * max_vent_power_m3_s
 
@@ -403,37 +403,39 @@ def mpc_cost_function(
             co2_sim_ppm += (total_co2_flow / volumes_m3) * micro_dt_s
             co2_sim_ppm += (co2_gen_m3_s / volumes_m3) * 1000000 * micro_dt_s
 
-        q_inter_w = np.dot(thermal_conductance_w_k, t_sim_c) - (
-            sum_thermal_cond * t_sim_c
+        q_inter_w = np.dot(thermal_conductance_w_k, temperature_sim_c) - (
+            sum_thermal_cond * temperature_sim_c
         )
-        q_air_w = ext_air_conductance_w_k * (t_out_forecast_c[i] - t_sim_c)
-        q_ground_w = ext_ground_conductance_w_k * (ground_temperature_c - t_sim_c)
+        q_air_w = ext_air_conductance_w_k * (temperature_out_forecast_c[i] - temperature_sim_c)
+        q_ground_w = ext_ground_conductance_w_k * (ground_temperature_c - temperature_sim_c)
 
-        bypass_active = (t_out_forecast_c[i] < t_sim_c) & (t_sim_c > 22.0)
+        # TODO: fix that
+        bypass_active = (temperature_out_forecast_c[i] < temperature_sim_c) & (temperature_sim_c > 22.0)
         effective_eff = np.where(bypass_active, 0.0, hrv_efficiency)
 
         q_vent_w = (
-            v_vent_m3_s * 1200.0 * (1 - effective_eff) * (t_out_forecast_c[i] - t_sim_c)
+            v_vent_m3_s * 1200.0 * (1 - effective_eff) * (temperature_out_forecast_c[i] - temperature_sim_c)
         )
 
         total_q_w = (
             q_inter_w + q_air_w + q_ground_w + q_vent_w + q_env_forecast_w[i] + q_hvac_w
         )
-        t_sim_c += (total_q_w / heat_capacity_j_k) * dt_seconds
 
-        target_t = t_target_horizon_c[i]
+        temperature_sim_c += (total_q_w / heat_capacity_j_k) * dt_seconds
+
+        target_temperature = temperature_target_horizon_c[i]
 
         for j in range(num_nodes):
-            if not np.isnan(target_t[j]):
-                below_min = max(0, (target_t[j] - temperature_tolerance_c) - t_sim_c[j])
-                above_max = max(0, t_sim_c[j] - (target_t[j] + temperature_tolerance_c))
+            if not np.isnan(target_temperature[j]):
+                below_min = max(0, (target_temperature[j] - temperature_tolerance_c) - temperature_sim_c[j])
+                above_max = max(0, temperature_sim_c[j] - (target_temperature[j] + temperature_tolerance_c))
 
                 # PENALTY : for temperature outside the bounds
                 total_penalty += (below_min**2) * 7500
                 total_penalty += (above_max**2) * 5000
 
             # PENALTY: for freezieng temperature
-            pipe_freeze_risk = max(0, 16 - t_sim_c[j])
+            pipe_freeze_risk = max(0, 16 - temperature_sim_c[j])
             total_penalty += (pipe_freeze_risk**2) * 100000
 
             # PENALTY: for exceding co2 level
@@ -464,3 +466,47 @@ def mpc_cost_function(
             total_penalty += (excess_kw**2) * 100000
 
     return total_penalty
+
+
+@njit(fastmath=True)
+def calculate_control_penalties(
+    v_perc_array,
+    q_perc_array,
+    prev_v_hvac_m3_s_array,
+    prev_q_hvac_w_array,
+    max_vent_power_m3_s,
+    max_heating_power_w,
+    max_cooling_power_w,
+    num_nodes
+):
+    VENTILATION_PENALTY = 50.0
+    VENTILATION_CHANGE_PENALTY = 100.0
+    Q_CHANGE_PENALTY = 100.0 
+
+    penalty = 0.0
+
+    for j in range(num_nodes):
+        v_perc = v_perc_array[j]
+        q_perc = q_perc_array[j]
+        
+        # PENALTY: for ventilating (noise, filter wear)
+        penalty += (v_perc**2) * VENTILATION_PENALTY
+
+        prev_v_perc = (prev_v_hvac_m3_s_array[j] / max_vent_power_m3_s) * 100.0
+
+        # PENALTY: for ventilation changing (fan slew rate)
+        delta_v_perc = v_perc - prev_v_perc
+        penalty += (delta_v_perc**2) * VENTILATION_CHANGE_PENALTY
+
+        # Calculate previous Q percentage (handling both heating and cooling limits)
+        prev_q_w = prev_q_hvac_w_array[j]
+        if prev_q_w >= 0.0:
+            prev_q_perc = (prev_q_w / max_heating_power_w[j]) * 100.0 if max_heating_power_w[j] > 0 else 0.0
+        else:
+            prev_q_perc = (prev_q_w / max_cooling_power_w[j]) * 100.0 if max_cooling_power_w[j] > 0 else 0.0
+
+        # PENALTY: for changing Q (compressor slew rate)
+        delta_q_perc = q_perc - prev_q_perc
+        penalty += (delta_q_perc**2) * Q_CHANGE_PENALTY
+
+    return penalty
