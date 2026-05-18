@@ -103,6 +103,7 @@ class Simulator:
             parser.ext_ground_conductance_w_k,
             metadata["ground_temperature"],
             parser.areas_m2,
+            self.num_nodes,
         )
 
         self.co2_solver = Co2Solver(
@@ -138,7 +139,7 @@ class Simulator:
             weather.wind_speed_m_s,
             weather.wind_direction_deg,
             weather.temperature_c,
-            self.thermal_solver.T,
+            self.thermal_solver.temperatures_c,
         )
 
         q_hvac_w, v_hvac_m3_s, forecast_data = self.mpc.step(
@@ -180,7 +181,7 @@ class Simulator:
         }
 
         denominators = np.where(
-            q_hvac_w >= 0, self.mpc.max_heating_power_w, self.mpc.min_heating_power_w
+            q_hvac_w >= 0, self.mpc.max_heating_power_w, self.mpc.max_cooling_power_w
         )
         q_hvac_perc = (q_hvac_w / denominators) * 100
         room_q_perc = {

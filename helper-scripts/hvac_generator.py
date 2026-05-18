@@ -3,10 +3,10 @@ import json
 import os
 
 
-def generate_default_schedules(input_yaml: str, output_json: str):
-    print(f"Reading topology from {input_yaml}...")
+def generate_default_schedules(district_definition, dweller_schedules):
+    print(f"Reading topology from {district_definition}...")
 
-    with open(input_yaml, "r", encoding="utf-8") as f:
+    with open(district_definition, "r", encoding="utf-8") as f:
         district = yaml.safe_load(f)
 
     schedules = {}
@@ -29,16 +29,17 @@ def generate_default_schedules(input_yaml: str, output_json: str):
                     "is_occupied": occ_24h,
                 }
 
-    os.makedirs(os.path.dirname(output_json), exist_ok=True)
+    os.makedirs(os.path.dirname(dweller_schedules), exist_ok=True)
 
-    with open(output_json, "w", encoding="utf-8") as f:
+    with open(dweller_schedules, "w", encoding="utf-8") as f:
         json.dump(schedules, f, indent=4)
 
-    print(f"Success! Generated schedules for {len(schedules)} rooms in {output_json}")
+    print(
+        f"Success! Generated schedules for {len(schedules)} rooms in {dweller_schedules}"
+    )
 
 
 if __name__ == "__main__":
-    YAML_PATH = "config/district-definition.yml"
-    JSON_PATH = "config/hvac-schedules.json"
-
-    generate_default_schedules(YAML_PATH, JSON_PATH)
+    generate_default_schedules(
+        "config/district-definition.yml", "config/dweller-schedules.json"
+    )

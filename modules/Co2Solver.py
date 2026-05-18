@@ -3,7 +3,7 @@
 
 # TODO: Make sure its calculated properly
 class Co2Solver:
-    CO2_GENERATION_M3_H_PER_PERSON = 0.025
+    CO2_GENERATION_M3_H = 0.025
     PERSON_PER_M3 = 1 / (30 * 2.5)
 
     def __init__(
@@ -48,42 +48,34 @@ class Co2Solver:
             + v_hvac_m3_s
         )
 
-        with np.errstate(divide="ignore", invalid="ignore"):
-            ach_per_second = np.where(
-                self.volumes_m3 > 0, flows_out_m3_s / self.volumes_m3, 0
-            )
+        ach_per_second = np.where(
+            self.volumes_m3 > 0, flows_out_m3_s / self.volumes_m3, 0
+        )
 
         max_ach_per_second = np.max(ach_per_second)
 
-        if max_ach_per_second > 0:
-            safe_dt = 0.5 / max_ach_per_second
-        else:
-            safe_dt = 60
-
-        safe_dt = min(safe_dt, 60, dt_seconds)
+        safe_dt = 0.5 / max_ach_per_second
 
         steps = int(np.ceil(dt_seconds / safe_dt))
         micro_dt_s = dt_seconds / steps
 
         active_people = self.base_people_in_room * current_mask
 
-        co2_generation_m3_s = (
-            self.CO2_GENERATION_M3_H_PER_PERSON / 3600
-        ) * active_people
+        co2_generation_m3_s = (self.CO2_GENERATION_M3_H / 3600) * active_people
 
         for _ in range(steps):
             co2_mixed_m3_s_ppm = np.dot(self.air_mixing_rate_m3_s, self.co2_ppm) - (
                 np.sum(self.air_mixing_rate_m3_s, axis=1) * self.co2_ppm
             )
 
-            co2_infil_m3_s_ppm = self.infiltration_rate_m3_s * (
+            co2_infiltration_m3_s_ppm = self.infiltration_rate_m3_s * (
                 outside_co2_ppm - self.co2_ppm
             )
 
             co2_vented_m3_s_ppm = v_hvac_m3_s * (outside_co2_ppm - self.co2_ppm)
 
             total_co2_flow_m3_s_ppm = (
-                co2_mixed_m3_s_ppm + co2_infil_m3_s_ppm + co2_vented_m3_s_ppm
+                co2_mixed_m3_s_ppm + co2_infiltration_m3_s_ppm + co2_vented_m3_s_ppm
             )
 
             self.co2_ppm += (total_co2_flow_m3_s_ppm / self.volumes_m3) * micro_dt_s

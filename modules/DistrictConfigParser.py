@@ -4,15 +4,15 @@ import numpy as np
 class DistrictModelParser:
     RHO_CP_AIR_J_M3K = 1200
 
-    def __init__(self, district_data):
-        self.raw_data = district_data
+    def __init__(self, district_config):
+        self.raw_data = district_config
         self.metadata = self.raw_data.get("metadata", {})
 
         self.room_indices = {}
         self.room_info = []
         self.external_connections = []
 
-        self._build_node_index()
+        self.build_node_index()
         self.num_rooms = len(self.room_indices)
 
         self.thermal_conductance_w_k = np.zeros((self.num_rooms, self.num_rooms))
@@ -33,8 +33,9 @@ class DistrictModelParser:
             b["id"]: b.get("standards", {}) for b in self.raw_data.get("buildings", [])
         }
 
-    def _build_node_index(self):
+    def build_node_index(self):
         idx = 0
+
         for building in self.raw_data.get("buildings", []):
             for apartment in building.get("apartments", []):
                 for room in apartment.get("rooms", []):
@@ -75,12 +76,12 @@ class DistrictModelParser:
             b_standards = building.get("standards", {})
 
             for connection in building.get("internal_connections", []):
-                self._apply_internal_connection(connection, b_standards, b_id)
+                self.apply_internal_connection(connection, b_standards, b_id)
 
             for connection in building.get("external_connections", []):
-                self._apply_external_connection(connection, b_standards, b_id)
+                self.apply_external_connection(connection, b_standards, b_id)
 
-    def _apply_internal_connection(self, connection, standards, building_id):
+    def apply_internal_connection(self, connection, standards, building_id):
         from_str = connection["from"]
         to_str = connection["to"]
 
@@ -106,7 +107,7 @@ class DistrictModelParser:
             self.air_mixing_rate_m3_s[idx_a, idx_b] += mixing_rate
             self.air_mixing_rate_m3_s[idx_b, idx_a] += mixing_rate
 
-    def _apply_external_connection(self, connection, standards, building_id):
+    def apply_external_connection(self, connection, standards, building_id):
         idx_a = self.room_indices[f"{building_id}:{connection['from']}"]
         target = connection["to"]
         thermal_code = standards[connection["thermal_code"]]

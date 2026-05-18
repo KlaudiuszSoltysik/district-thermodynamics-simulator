@@ -254,7 +254,7 @@ if __name__ == "__main__":
             "config/district-definition.yml",
             "config/weather-history.csv",
             "config/prices-history.csv",
-            "config/hvac-schedules.json",
+            "config/dweller-schedules.json",
             dt_seconds=300,
             batch_size=12,
         )

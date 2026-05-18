@@ -31,14 +31,14 @@ class EnergyService:
         cop_heating, cop_cooling = heat_pump.get_cop(weather)
         pv_yield_kw = pv_farm.get_power_prognosis(weather)
 
-        electricity_price = float(
+        electricity_price_eur_mwh = float(
             self.prices_history.iloc[idx_after]["electricity_price"]
         )
-        gas_price = float(self.prices_history.iloc[idx_after]["gas_price"])
+        gas_price_eur_mwh = float(self.prices_history.iloc[idx_after]["gas_price"])
 
         return EnergyState(
-            electricity_price_eur_per_mwh=electricity_price,
-            gas_price_eur_per_mwh=gas_price,
+            electricity_price_eur_per_mwh=electricity_price_eur_mwh,
+            gas_price_eur_per_mwh=gas_price_eur_mwh,
             pv_yield_kw=pv_yield_kw,
             cop_heating=cop_heating,
             cop_cooling=cop_cooling,

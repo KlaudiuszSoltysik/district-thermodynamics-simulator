@@ -19,9 +19,9 @@ class MPC:
         self,
         pv_farm,
         heat_pump,
-        num_nodes: int,
-        district_id_dict: dict,
-        schedules_data: dict,
+        num_nodes,
+        district_id_dict,
+        schedules_data,
     ):
         self.control_steps = self.HORIZON_HOURS * self.STEPS_PER_HOUR
 
@@ -35,7 +35,7 @@ class MPC:
         self.district_id_dict = district_id_dict
 
         self.max_heating_power_w = heat_pump.max_heating_power_w
-        self.min_heating_power_w = heat_pump.max_cooling_power_w
+        self.max_cooling_power_w = heat_pump.max_cooling_power_w
 
         self.target_temp_24h_c = np.full((self.num_nodes, 24), 21)
         self.max_co2_24h_ppm = np.full((self.num_nodes, 24), 1000)
@@ -128,7 +128,7 @@ class MPC:
             cop_cool_forecast = np.zeros(horizon_steps)
 
             future_time = current_time
-            t_frozen_for_prediction = np.copy(thermal_solver.T)
+            t_frozen_for_prediction = np.copy(thermal_solver.temperatures_c)
 
             for i in range(horizon_steps):
                 weather = weather_service.get_weather(future_time)
@@ -177,13 +177,13 @@ class MPC:
                 self.control_steps,
                 self.num_nodes,
                 np.asarray(self.max_heating_power_w, dtype=float),
-                np.asarray(self.min_heating_power_w, dtype=float),
+                np.asarray(self.max_cooling_power_w, dtype=float),
                 float(self.MAX_VENT_POWER_M3_S),
                 co2_generation_rates_m3_s.astype(float),
                 float(self.TEMPERATURE_TOLERANCE_C),
                 float(dt_seconds),
                 int(horizon_steps),
-                thermal_solver.T.astype(float),
+                thermal_solver.temperatures_c.astype(float),
                 co2_solver.co2_ppm.astype(float),
                 np.asarray(current_q_w, dtype=float),
                 np.asarray(current_v_m3_s, dtype=float),
@@ -230,7 +230,7 @@ class MPC:
             optimal_q_w = np.where(
                 optimal_q_percent >= 0,
                 (optimal_q_percent / 100) * self.max_heating_power_w,
-                (optimal_q_percent / 100) * self.min_heating_power_w,
+                (optimal_q_percent / 100) * self.max_cooling_power_w,
             )
             optimal_v_m3_s = (optimal_v_percent / 100) * self.MAX_VENT_POWER_M3_S
 
@@ -371,7 +371,7 @@ def mpc_cost_function(
             v_vent_m3_s[j] = (v_perc / 100) * max_vent_power_m3_s
 
             # PENALTY: for ventilating
-            total_penalty += (v_perc**2) * 100
+            total_penalty += (v_perc**2) * 50
 
             if max_vent_power_m3_s > 0:
                 prev_v_perc = (prev_v_hvac_m3_s[j] / max_vent_power_m3_s) * 100
@@ -408,11 +408,13 @@ def mpc_cost_function(
         )
         q_air_w = ext_air_conductance_w_k * (t_out_forecast_c[i] - t_sim_c)
         q_ground_w = ext_ground_conductance_w_k * (ground_temperature_c - t_sim_c)
-        
+
         bypass_active = (t_out_forecast_c[i] < t_sim_c) & (t_sim_c > 22.0)
         effective_eff = np.where(bypass_active, 0.0, hrv_efficiency)
-        
-        q_vent_w = v_vent_m3_s * 1200.0 * (1 - effective_eff) * (t_out_forecast_c[i] - t_sim_c)
+
+        q_vent_w = (
+            v_vent_m3_s * 1200.0 * (1 - effective_eff) * (t_out_forecast_c[i] - t_sim_c)
+        )
 
         total_q_w = (
             q_inter_w + q_air_w + q_ground_w + q_vent_w + q_env_forecast_w[i] + q_hvac_w

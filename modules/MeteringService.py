@@ -54,6 +54,7 @@ class MeteringService:
         grid_sell_kw = np.maximum(0, pv_yield_kw - total_elec_demand_kw)
         pv_self_consumed_kw = min(total_elec_demand_kw, pv_yield_kw)
 
+        # TODO: fix that too
         gas_buy_kw = 0
 
         self.total_pv_yield_kwh += pv_yield_kw * hours
