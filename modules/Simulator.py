@@ -182,7 +182,7 @@ class Simulator:
         denominators = np.where(
             q_hvac_w >= 0, self.mpc.max_heating_power_w, self.mpc.min_heating_power_w
         )
-        q_hvac_perc = (q_hvac_w / denominators) * 100.0
+        q_hvac_perc = (q_hvac_w / denominators) * 100
         room_q_perc = {
             self.index_to_id[i]: float(q_hvac_perc[i]) for i in range(self.num_nodes)
         }

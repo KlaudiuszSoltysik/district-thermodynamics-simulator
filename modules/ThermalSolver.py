@@ -3,7 +3,7 @@
 
 class ThermalSolver:
     HRV_EFFICIENCY = 0.8
-    RHO_CP_AIR_J_M3K = 1200.0
+    RHO_CP_AIR_J_M3K = 1200
 
     def __init__(
         self,
@@ -38,7 +38,7 @@ class ThermalSolver:
         q_vent_w = (
             v_hvac_m3_s
             * self.RHO_CP_AIR_J_M3K
-            * (1.0 - self.HRV_EFFICIENCY)
+            * (1 - self.HRV_EFFICIENCY)
             * (out_temperature_c - self.T)
         )
 

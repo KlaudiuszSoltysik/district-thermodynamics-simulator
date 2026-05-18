@@ -10,8 +10,9 @@ class MPC:
     RECALCULATION_INTERVAL_STEPS = 12
     HORIZON_HOURS = 6
     STEPS_PER_HOUR = 1
-    MAX_VENT_POWER = 0.015
-    CONTRACTED_POWER_KW = 15.0
+    MAX_VENT_POWER_M3_S = 0.02
+    CONTRACTED_POWER_KW = 15
+    PERSON_PER_M3 = 1 / (30 * 2.5)
 
     def __init__(
         self,
@@ -35,8 +36,8 @@ class MPC:
         self.max_heating_power_w = heat_pump.max_heating_power_w
         self.min_heating_power_w = heat_pump.max_cooling_power_w
 
-        self.target_temp_24h_c = np.full((self.num_nodes, 24), 21.0)
-        self.max_co2_24h_ppm = np.full((self.num_nodes, 24), 1000.0)
+        self.target_temp_24h_c = np.full((self.num_nodes, 24), 21)
+        self.max_co2_24h_ppm = np.full((self.num_nodes, 24), 1000)
         self.is_occupied_24h = np.zeros((self.num_nodes, 24))
 
         self.load_schedules(schedules_data)
@@ -96,6 +97,7 @@ class MPC:
         needs_recalc = False
         if (
             self.cached_q_plan_w is None
+            or self.cached_v_plan_m3_s is None
             or self.steps_since_last_recalc >= self.RECALCULATION_INTERVAL_STEPS
         ):
             needs_recalc = True
@@ -103,10 +105,18 @@ class MPC:
         forecast_data = None
 
         if needs_recalc:
-            if self.cached_q_plan_w is not None and self.steps_since_last_recalc < len(self.cached_q_plan_w):
+            if (
+                self.cached_q_plan_w is not None
+                and self.cached_v_plan_m3_s is not None
+                and self.steps_since_last_recalc < len(self.cached_q_plan_w)
+            ):
                 current_q_w = self.cached_q_plan_w[self.steps_since_last_recalc, :]
+                current_v_m3_s = self.cached_v_plan_m3_s[
+                    self.steps_since_last_recalc, :
+                ]
             else:
                 current_q_w = np.zeros(self.num_nodes)
+                current_v_m3_s = np.zeros(self.num_nodes)
 
             t_out_forecast_c = np.zeros(horizon_steps)
             co2_out_forecast_ppm = np.zeros(horizon_steps)
@@ -151,25 +161,31 @@ class MPC:
 
             num_decisions = self.control_steps * self.num_nodes
 
-            bounds_q = [(-100.0, 100.0) for _ in range(num_decisions)]
-            bounds_v = [(0.0, 100.0) for _ in range(num_decisions)]
+            bounds_q = [(-100, 100) for _ in range(num_decisions)]
+            bounds_v = [(0, 100) for _ in range(num_decisions)]
             bounds = bounds_q + bounds_v
 
             initial_guess = np.zeros(num_decisions * 2)
+
+            base_people = co2_solver.volumes_m3 * self.PERSON_PER_M3
+            co2_generation_rates_m3_s = (
+                self.CO2_GENERATION_M3_H_PER_PERSON / 3600
+            ) * base_people
 
             args = (
                 self.control_steps,
                 self.num_nodes,
                 np.asarray(self.max_heating_power_w, dtype=float),
                 np.asarray(self.min_heating_power_w, dtype=float),
-                float(self.MAX_VENT_POWER),
-                float(self.CO2_GENERATION_M3_H_PER_PERSON / 3600.0),
+                float(self.MAX_VENT_POWER_M3_S),
+                co2_generation_rates_m3_s.astype(float),
                 float(self.TEMPERATURE_TOLERANCE_C),
                 float(dt_seconds),
                 int(horizon_steps),
                 thermal_solver.T.astype(float),
                 co2_solver.co2_ppm.astype(float),
                 np.asarray(current_q_w, dtype=float),
+                np.asarray(current_v_m3_s, dtype=float),
                 float(self.CONTRACTED_POWER_KW),
                 t_target_horizon_c.astype(float),
                 co2_max_horizon_ppm.astype(float),
@@ -211,10 +227,10 @@ class MPC:
 
             optimal_q_w = np.where(
                 optimal_q_percent >= 0,
-                (optimal_q_percent / 100.0) * self.max_heating_power_w,
-                (optimal_q_percent / 100.0) * self.min_heating_power_w,
+                (optimal_q_percent / 100) * self.max_heating_power_w,
+                (optimal_q_percent / 100) * self.min_heating_power_w,
             )
-            optimal_v_m3_s = (optimal_v_percent / 100.0) * self.MAX_VENT_POWER
+            optimal_v_m3_s = (optimal_v_percent / 100) * self.MAX_VENT_POWER_M3_S
 
             block_size = horizon_steps // self.control_steps
 
@@ -285,14 +301,15 @@ def mpc_cost_function(
     num_nodes,
     max_heating_power_w,
     min_heating_power_w,
-    max_vent_power,
-    co2_generation_rate,
+    max_vent_power_m3_s,
+    co2_generation_rates_m3_s,
     temperature_tolerance_c,
     dt_seconds,
     horizon_steps,
     current_t_c,
     current_co2_ppm,
     current_q_hvac_w,
+    current_v_m3_s,
     contracted_power_kw,
     t_target_horizon_c,
     co2_max_horizon_ppm,
@@ -300,7 +317,7 @@ def mpc_cost_function(
     t_out_forecast_c,
     co2_out_forecast_ppm,
     q_env_forecast_w,
-    elec_cost_forecast,
+    elec_cost_forecast_eur_mwh,
     res_yield_forecast_kw,
     cop_heat_forecast,
     cop_cool_forecast,
@@ -320,10 +337,11 @@ def mpc_cost_function(
     co2_sim_ppm = np.copy(current_co2_ppm)
 
     prev_q_hvac_w = np.copy(current_q_hvac_w)
+    prev_v_hvac_m3_s = np.copy(current_v_m3_s)
 
-    total_penalty = 0.0
+    total_penalty = 0
 
-    micro_steps = int(np.ceil(dt_seconds / 60.0))
+    micro_steps = int(np.ceil(dt_seconds / 60))
     micro_dt_s = dt_seconds / micro_steps
 
     sum_air_mixing = np.sum(air_mixing_rate_m3_s, axis=1)
@@ -343,19 +361,33 @@ def mpc_cost_function(
             v_perc = x_flat[idx_v]
 
             if q_perc >= 0:
-                q_hvac_w[j] = (q_perc / 100.0) * max_heating_power_w[j]
+                q_hvac_w[j] = (q_perc / 100) * max_heating_power_w[j]
             else:
-                q_hvac_w[j] = (q_perc / 100.0) * min_heating_power_w[j]
+                q_hvac_w[j] = (q_perc / 100) * min_heating_power_w[j]
 
-            v_vent_m3_s[j] = (v_perc / 100.0) * max_vent_power
+            v_vent_m3_s[j] = (v_perc / 100) * max_vent_power_m3_s
 
-            # PENALTY 1: for HVAC Q changing
+            # PENALTY: for ventilating
+            total_penalty += (v_perc**2) * 100
+
+            if max_vent_power_m3_s > 0:
+                prev_v_perc = (prev_v_hvac_m3_s[j] / max_vent_power_m3_s) * 100
+            else:
+                prev_v_perc = 0
+
+            # PENALTY: for ventilation changing
+            delta_v_perc = v_perc - prev_v_perc
+            total_penalty += (delta_v_perc**2) * 100
+
+            prev_v_hvac_m3_s[j] = v_vent_m3_s[j]
+
+            # PENALTY: for changing Q
             delta_q = q_hvac_w[j] - prev_q_hvac_w[j]
             total_penalty += (delta_q**2) * 0.05
-            
+
             prev_q_hvac_w[j] = q_hvac_w[j]
 
-        co2_gen_m3_s = co2_generation_rate * is_occupied_horizon[i]
+        co2_gen_m3_s = co2_generation_rates_m3_s * is_occupied_horizon[i]
 
         for _ in range(micro_steps):
             co2_mixed = np.dot(air_mixing_rate_m3_s, co2_sim_ppm) - (
@@ -366,15 +398,15 @@ def mpc_cost_function(
 
             total_co2_flow = co2_mixed + co2_infil + co2_vent
             co2_sim_ppm += (total_co2_flow / volumes_m3) * micro_dt_s
-            co2_sim_ppm += (co2_gen_m3_s / volumes_m3) * 1_000_000.0 * micro_dt_s
-            co2_sim_ppm = np.maximum(co2_sim_ppm, 400.0)
+            co2_sim_ppm += (co2_gen_m3_s / volumes_m3) * 1000000 * micro_dt_s
+            co2_sim_ppm = np.maximum(co2_sim_ppm, 400)
 
         q_inter_w = np.dot(thermal_conductance_w_k, t_sim_c) - (
             sum_thermal_cond * t_sim_c
         )
         q_air_w = ext_air_conductance_w_k * (t_out_forecast_c[i] - t_sim_c)
         q_ground_w = ext_ground_conductance_w_k * (ground_temperature_c - t_sim_c)
-        q_vent_w = v_vent_m3_s * 1200.0 * (1.0 - 0.8) * (t_out_forecast_c[i] - t_sim_c)
+        q_vent_w = v_vent_m3_s * 1200 * (1 - 0.8) * (t_out_forecast_c[i] - t_sim_c)
 
         total_q_w = (
             q_inter_w + q_air_w + q_ground_w + q_vent_w + q_env_forecast_w[i] + q_hvac_w
@@ -385,50 +417,42 @@ def mpc_cost_function(
 
         for j in range(num_nodes):
             if not np.isnan(target_t[j]):
-                below_min = max(
-                    0.0, (target_t[j] - temperature_tolerance_c) - t_sim_c[j]
-                )
-                above_max = max(
-                    0.0, t_sim_c[j] - (target_t[j] + temperature_tolerance_c)
-                )
+                below_min = max(0, (target_t[j] - temperature_tolerance_c) - t_sim_c[j])
+                above_max = max(0, t_sim_c[j] - (target_t[j] + temperature_tolerance_c))
 
-                # PENALTY 1: Temperature Comfort
-                # Quadratic cost for drifting outside the allowed temperature tolerance zone.
-                total_penalty += (below_min**2) * 5000.0
-                total_penalty += (above_max**2) * 5000.0
+                # PENALTY : for temperature outside the bounds
+                total_penalty += (below_min**2) * 5000
+                total_penalty += (above_max**2) * 5000
 
-            # PENALTY 2: Safety / Anti-Freeze
-            # Massive quadratic cost to strictly prevent room temperature from dropping below 16.0 C (pipe burst risk).
-            pipe_freeze_risk = max(0.0, 16.0 - t_sim_c[j])
-            total_penalty += (pipe_freeze_risk**2) * 100000.0
+            # PENALTY: for freezieng temperature
+            pipe_freeze_risk = max(0, 16 - t_sim_c[j])
+            total_penalty += (pipe_freeze_risk**2) * 100000
 
-            # PENALTY 3: Air Quality (CO2)
-            # Quadratic cost applied only if the simulated CO2 exceeds the maximum allowed ppm threshold.
-            co2_violation = max(0.0, co2_sim_ppm[j] - co2_max_horizon_ppm[i, j])
-            total_penalty += (co2_violation**2) * 100.0
+            # PENALTY: for exceding co2 level
+            co2_violation = max(0, co2_sim_ppm[j] - co2_max_horizon_ppm[i, j])
+            total_penalty += (co2_violation**2) * 100
 
-        q_heating_w = np.maximum(0.0, q_hvac_w)
-        q_cooling_w = np.maximum(0.0, -q_hvac_w)
-        v_power_w = v_vent_m3_s * 1000.0
+        q_heating_w = np.maximum(0, q_hvac_w)
+        q_cooling_w = np.maximum(0, -q_hvac_w)
+        v_power_w = v_vent_m3_s * 1000
 
-        heat_elec_demand_kw = (np.sum(q_heating_w) / cop_heat_forecast[i]) / 1000.0
-        cool_elec_demand_kw = (np.sum(q_cooling_w) / cop_cool_forecast[i]) / 1000.0
-        vent_elec_demand_kw = np.sum(v_power_w) / 1000.0
+        heat_elec_demand_kw = (np.sum(q_heating_w) / cop_heat_forecast[i]) / 1000
+        cool_elec_demand_kw = (np.sum(q_cooling_w) / cop_cool_forecast[i]) / 1000
+        vent_elec_demand_kw = np.sum(v_power_w) / 1000
 
         total_elec_demand_kw = (
             heat_elec_demand_kw + cool_elec_demand_kw + vent_elec_demand_kw
         )
-        
-        grid_buy_kw = max(0.0, total_elec_demand_kw - res_yield_forecast_kw[i])
 
-        # PENALTY 4: Financial Cost
-        # Linear cost based on actual grid electricity prices, applied only to energy bought from the grid (after PV usage).
-        step_financial_cost = grid_buy_kw * elec_cost_forecast[i]
-        total_penalty += step_financial_cost * 100.0
+        grid_buy_kw = max(0, total_elec_demand_kw - res_yield_forecast_kw[i])
 
-        # PENALTY 5: Contracted Peak Power Limit (Soft Constraint)
+        # PENALTY: for high costs
+        step_financial_cost = grid_buy_kw * elec_cost_forecast_eur_mwh[i]
+        total_penalty += step_financial_cost * 100
+
+        # PENALTY: for exceding max contracted power
         if grid_buy_kw > contracted_power_kw:
             excess_kw = grid_buy_kw - contracted_power_kw
-            total_penalty += (excess_kw**2) * 100000.0
+            total_penalty += (excess_kw**2) * 100000
 
     return total_penalty

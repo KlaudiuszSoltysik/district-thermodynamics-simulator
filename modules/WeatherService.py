@@ -42,7 +42,7 @@ class WeatherService:
         t2 = self.weather_history.index[idx_after]  # type: ignore
 
         weight2 = (current_time - t1).total_seconds() / (t2 - t1).total_seconds()
-        weight1 = 1.0 - weight2
+        weight1 = 1 - weight2
 
         interp_row = (self.weather_history.loc[t1] * weight1) + (
             self.weather_history.loc[t2] * weight2
@@ -61,7 +61,7 @@ class WeatherService:
             temperature_c=float(interp_row["temperature"]),
             wind_speed_m_s=float(interp_row["wind_speed"]),
             wind_direction_deg=float(wind_direction_deg),
-            sun_radiation_w_m2=float(interp_row.get("sun_radiation", 0.0)),
+            sun_radiation_w_m2=float(interp_row.get("sun_radiation", 0)),
             sun_altitude_deg=float(solar_pos["apparent_elevation"].iloc[0]),  # type: ignore
             sun_azimuth_deg=float(solar_pos["azimuth"].iloc[0]),  # type: ignore
             co2_ppm=int(round(interp_row["co2"])),

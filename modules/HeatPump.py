@@ -4,10 +4,10 @@ class HeatPump:
         self,
         max_heating_power_w,
         max_cooling_power_w,
-        base_cop=3.0,
+        base_cop=3,
         temp_modifier=0.1,
-        min_cop=1.0,
-        eer=3.0,
+        min_cop=1,
+        eer=3,
     ):
         self.max_heating_power_w = max_heating_power_w
         self.max_cooling_power_w = max_cooling_power_w

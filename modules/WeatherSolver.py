@@ -4,8 +4,8 @@ import numpy as np
 
 
 class WeatherSolver:
-    RHO_CP_AIR_J_M3K = 1200.0
-    H_EXTERNAL_W_M2K = 25.0
+    RHO_CP_AIR_J_M3K = 1200
+    H_EXTERNAL_W_M2K = 25
 
     def __init__(self, external_connections, standards, num_nodes):
         self.connections = external_connections
@@ -36,7 +36,7 @@ class WeatherSolver:
 
                 if cos_theta > 0:
                     room_idx = conn["room_idx"]
-                    win_area_sum_m2 = 0.0
+                    win_area_sum_m2 = 0
 
                     for window in conn.get("windows", []):
                         q_env_w[room_idx] += (
@@ -61,14 +61,14 @@ class WeatherSolver:
             room_idx = conn["room_idx"]
 
             if conn["tilt"] < 10:
-                exposure = 1.0
+                exposure = 1
             else:
                 wind_az_diff_rad = math.radians(wind_direction_deg - conn["azimuth"])
-                exposure = (math.cos(wind_az_diff_rad) + 1.0) / 2.0
+                exposure = (math.cos(wind_az_diff_rad) + 1) / 2
 
             infiltration_m3_s = (
                 conn["ach_wind_coef"] * wind_speed_m_s * exposure
-            ) / 3600.0
+            ) / 3600
 
             q_env_w[room_idx] += (
                 infiltration_m3_s

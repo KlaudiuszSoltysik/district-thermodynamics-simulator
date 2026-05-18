@@ -1,8 +1,10 @@
 ﻿import numpy as np
 
 
+# TODO: Make sure its calculated properly
 class Co2Solver:
     CO2_GENERATION_M3_H_PER_PERSON = 0.025
+    PERSON_PER_M3 = 1 / (30 * 2.5)
 
     def __init__(
         self,
@@ -20,9 +22,11 @@ class Co2Solver:
         self.num_nodes = num_nodes
         self.index_to_id = index_to_id
 
-        self.co2_ppm = np.full(self.num_nodes, 500.0)
+        self.co2_ppm = np.full(self.num_nodes, 800.0)
 
         self.occupancy_mask = np.zeros((self.num_nodes, 24))
+
+        self.base_people_in_room = self.volumes_m3 * self.PERSON_PER_M3
 
         self.set_occupancy_schedule(schedules_data)
 
@@ -54,16 +58,18 @@ class Co2Solver:
         if max_ach_per_second > 0:
             safe_dt = 0.5 / max_ach_per_second
         else:
-            safe_dt = 60.0
+            safe_dt = 60
 
-        safe_dt = min(safe_dt, 60.0, dt_seconds)
+        safe_dt = min(safe_dt, 60, dt_seconds)
 
         steps = int(np.ceil(dt_seconds / safe_dt))
         micro_dt_s = dt_seconds / steps
 
+        active_people = self.base_people_in_room * current_mask
+
         co2_generation_m3_s = (
-            self.CO2_GENERATION_M3_H_PER_PERSON / 3600.0
-        ) * current_mask
+            self.CO2_GENERATION_M3_H_PER_PERSON / 3600
+        ) * active_people
 
         for _ in range(steps):
             co2_mixed_m3_s_ppm = np.dot(self.air_mixing_rate_m3_s, self.co2_ppm) - (
@@ -83,9 +89,9 @@ class Co2Solver:
             self.co2_ppm += (total_co2_flow_m3_s_ppm / self.volumes_m3) * micro_dt_s
 
             self.co2_ppm += (
-                (co2_generation_m3_s / self.volumes_m3) * 1000000.0 * micro_dt_s
+                (co2_generation_m3_s / self.volumes_m3) * 1000000 * micro_dt_s
             )
 
-            self.co2_ppm = np.maximum(self.co2_ppm, 400.0)
+            self.co2_ppm = np.maximum(self.co2_ppm, 400)
 
         return np.round(self.co2_ppm).astype(int)

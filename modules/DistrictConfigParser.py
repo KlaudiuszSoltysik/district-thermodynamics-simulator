@@ -2,7 +2,7 @@ import numpy as np
 
 
 class DistrictModelParser:
-    RHO_CP_AIR_J_M3K = 1200.0
+    RHO_CP_AIR_J_M3K = 1200
 
     def __init__(self, district_data):
         self.raw_data = district_data
@@ -125,7 +125,7 @@ class DistrictModelParser:
             ach = standards["ach_wind_coef"]
             vol_m3 = self.volumes_m3[idx_a]
 
-            infiltration_m3_s = (vol_m3 * ach) / 3600.0
+            infiltration_m3_s = (vol_m3 * ach) / 3600
             self.infiltration_rate_m3_s[idx_a] += infiltration_m3_s
 
             self.external_connections.append(
