@@ -1,1 +1,3 @@
+- penalize for cooling in winter and heating in summer
+- improve bypass logic
 - add gas heating

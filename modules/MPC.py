@@ -128,7 +128,9 @@ class MPC:
             cop_cool_forecast = np.zeros(horizon_steps)
 
             future_time = current_time
-            temperatures_frozen_for_prediction_c = np.copy(thermal_solver.temperatures_c)
+            temperatures_frozen_for_prediction_c = np.copy(
+                thermal_solver.temperatures_c
+            )
 
             for i in range(horizon_steps):
                 weather = weather_service.get_weather(future_time)
@@ -149,7 +151,9 @@ class MPC:
                 energy_costs = energy_service.get_effective_costs(
                     future_time, self.pv_farm, self.heat_pump, weather
                 )
-                elec_cost_forecast_eur_mwh[i] = energy_costs.electricity_price_eur_per_mwh
+                elec_cost_forecast_eur_mwh[i] = (
+                    energy_costs.electricity_price_eur_per_mwh
+                )
                 res_yield_forecast_kw[i] = energy_costs.pv_yield_kw
                 cop_heat_forecast[i] = energy_costs.cop_heating
                 cop_cool_forecast[i] = energy_costs.cop_cooling
@@ -356,6 +360,9 @@ def mpc_cost_function(
         q_hvac_w = np.zeros(num_nodes)
         v_vent_m3_s = np.zeros(num_nodes)
 
+        v_perc_array = np.zeros(num_nodes)
+        q_perc_array = np.zeros(num_nodes)
+
         for j in range(num_nodes):
             idx_q = (c_idx * num_nodes) + j
             idx_v = half_idx + (c_idx * num_nodes) + j
@@ -363,31 +370,29 @@ def mpc_cost_function(
             q_perc = x_flat[idx_q]
             v_perc = x_flat[idx_v]
 
+            q_perc_array[j] = q_perc
+            v_perc_array[j] = v_perc
+
             if q_perc >= 0:
-                q_hvac_w[j] = (q_perc / 100) * max_heating_power_w[j]
+                q_hvac_w[j] = (q_perc / 100.0) * max_heating_power_w[j]
             else:
-                q_hvac_w[j] = (q_perc / 100) * max_cooling_power_w[j]
+                q_hvac_w[j] = (q_perc / 100.0) * max_cooling_power_w[j]
 
-            v_vent_m3_s[j] = (v_perc / 100) * max_vent_power_m3_s
+            v_vent_m3_s[j] = (v_perc / 100.0) * max_vent_power_m3_s
 
-            # PENALTY: for ventilating
-            total_penalty += (v_perc**2) * 50
+        total_penalty += calculate_control_penalties(
+            v_perc_array,
+            q_perc_array,
+            prev_v_hvac_m3_s,
+            prev_q_hvac_w,
+            max_vent_power_m3_s,
+            max_heating_power_w,
+            max_cooling_power_w,
+            num_nodes,
+        )
 
-            if max_vent_power_m3_s > 0:
-                prev_v_perc = (prev_v_hvac_m3_s[j] / max_vent_power_m3_s) * 100
-            else:
-                prev_v_perc = 0
-
-            # PENALTY: for ventilation changing
-            delta_v_perc = v_perc - prev_v_perc
-            total_penalty += (delta_v_perc**2) * 100
-
+        for j in range(num_nodes):
             prev_v_hvac_m3_s[j] = v_vent_m3_s[j]
-
-            # PENALTY: for changing Q
-            delta_q = q_hvac_w[j] - prev_q_hvac_w[j]
-            total_penalty += (delta_q**2) * 0.05
-
             prev_q_hvac_w[j] = q_hvac_w[j]
 
         co2_gen_m3_s = co2_generation_rates_m3_s * is_occupied_horizon[i]
@@ -406,15 +411,24 @@ def mpc_cost_function(
         q_inter_w = np.dot(thermal_conductance_w_k, temperature_sim_c) - (
             sum_thermal_cond * temperature_sim_c
         )
-        q_air_w = ext_air_conductance_w_k * (temperature_out_forecast_c[i] - temperature_sim_c)
-        q_ground_w = ext_ground_conductance_w_k * (ground_temperature_c - temperature_sim_c)
+        q_air_w = ext_air_conductance_w_k * (
+            temperature_out_forecast_c[i] - temperature_sim_c
+        )
+        q_ground_w = ext_ground_conductance_w_k * (
+            ground_temperature_c - temperature_sim_c
+        )
 
         # TODO: fix that
-        bypass_active = (temperature_out_forecast_c[i] < temperature_sim_c) & (temperature_sim_c > 22.0)
-        effective_eff = np.where(bypass_active, 0.0, hrv_efficiency)
+        bypass_active = (temperature_out_forecast_c[i] < temperature_sim_c) & (
+            temperature_sim_c > 22
+        )
+        effective_eff = np.where(bypass_active, 0, hrv_efficiency)
 
         q_vent_w = (
-            v_vent_m3_s * 1200.0 * (1 - effective_eff) * (temperature_out_forecast_c[i] - temperature_sim_c)
+            v_vent_m3_s
+            * 1200
+            * (1 - effective_eff)
+            * (temperature_out_forecast_c[i] - temperature_sim_c)
         )
 
         total_q_w = (
@@ -423,47 +437,25 @@ def mpc_cost_function(
 
         temperature_sim_c += (total_q_w / heat_capacity_j_k) * dt_seconds
 
-        target_temperature = temperature_target_horizon_c[i]
-
-        for j in range(num_nodes):
-            if not np.isnan(target_temperature[j]):
-                below_min = max(0, (target_temperature[j] - temperature_tolerance_c) - temperature_sim_c[j])
-                above_max = max(0, temperature_sim_c[j] - (target_temperature[j] + temperature_tolerance_c))
-
-                # PENALTY : for temperature outside the bounds
-                total_penalty += (below_min**2) * 7500
-                total_penalty += (above_max**2) * 5000
-
-            # PENALTY: for freezieng temperature
-            pipe_freeze_risk = max(0, 16 - temperature_sim_c[j])
-            total_penalty += (pipe_freeze_risk**2) * 100000
-
-            # PENALTY: for exceding co2 level
-            co2_violation = max(0, co2_sim_ppm[j] - co2_max_horizon_ppm[i, j])
-            total_penalty += (co2_violation**2) * 100
-
-        q_heating_w = np.maximum(0, q_hvac_w)
-        q_cooling_w = np.maximum(0, -q_hvac_w)
-        v_power_w = v_vent_m3_s * 1000
-
-        heat_elec_demand_kw = (np.sum(q_heating_w) / cop_heat_forecast[i]) / 1000
-        cool_elec_demand_kw = (np.sum(q_cooling_w) / cop_cool_forecast[i]) / 1000
-        vent_elec_demand_kw = np.sum(v_power_w) / 1000
-
-        total_elec_demand_kw = (
-            heat_elec_demand_kw + cool_elec_demand_kw + vent_elec_demand_kw
+        total_penalty += calculate_comfort_penalties(
+            temperature_sim_c,
+            co2_sim_ppm,
+            temperature_target_horizon_c[i],
+            temperature_tolerance_c,
+            co2_max_horizon_ppm,
+            num_nodes,
+            i,
         )
 
-        grid_buy_kw = max(0, total_elec_demand_kw - res_yield_forecast_kw[i])
-
-        # PENALTY: for high costs
-        step_financial_cost = grid_buy_kw * elec_cost_forecast_eur_mwh[i]
-        total_penalty += step_financial_cost * 100
-
-        # PENALTY: for exceding max contracted power
-        if grid_buy_kw > contracted_power_kw:
-            excess_kw = grid_buy_kw - contracted_power_kw
-            total_penalty += (excess_kw**2) * 100000
+        total_penalty += calculate_financial_and_grid_penalties(
+            q_hvac_w,
+            v_vent_m3_s,
+            cop_heat_forecast[i],
+            cop_cool_forecast[i],
+            elec_cost_forecast_eur_mwh[i],
+            res_yield_forecast_kw[i],
+            contracted_power_kw,
+        )
 
     return total_penalty
 
@@ -477,36 +469,131 @@ def calculate_control_penalties(
     max_vent_power_m3_s,
     max_heating_power_w,
     max_cooling_power_w,
-    num_nodes
+    num_nodes,
 ):
-    VENTILATION_PENALTY = 50.0
-    VENTILATION_CHANGE_PENALTY = 100.0
-    Q_CHANGE_PENALTY = 100.0 
+    VENTILATION_PENALTY_WEIGHT = 50.0
+    VENTILATION_CHANGE_PENALTY_WEIGHT = 100.0
+    Q_CHANGE_PENALTY_WEIGHT = 100.0
 
     penalty = 0.0
 
-    for j in range(num_nodes):
-        v_perc = v_perc_array[j]
-        q_perc = q_perc_array[j]
-        
-        # PENALTY: for ventilating (noise, filter wear)
-        penalty += (v_perc**2) * VENTILATION_PENALTY
+    for i in range(num_nodes):
+        v_perc = v_perc_array[i]
+        q_perc = q_perc_array[i]
 
-        prev_v_perc = (prev_v_hvac_m3_s_array[j] / max_vent_power_m3_s) * 100.0
+        # PENALTY: for ventilating (noise, filter wear)
+        penalty += (v_perc**2) * VENTILATION_PENALTY_WEIGHT
+
+        prev_v_perc = (prev_v_hvac_m3_s_array[i] / max_vent_power_m3_s) * 100.0
 
         # PENALTY: for ventilation changing (fan slew rate)
         delta_v_perc = v_perc - prev_v_perc
-        penalty += (delta_v_perc**2) * VENTILATION_CHANGE_PENALTY
+        penalty += (delta_v_perc**2) * VENTILATION_CHANGE_PENALTY_WEIGHT
 
-        # Calculate previous Q percentage (handling both heating and cooling limits)
-        prev_q_w = prev_q_hvac_w_array[j]
+        prev_q_w = prev_q_hvac_w_array[i]
         if prev_q_w >= 0.0:
-            prev_q_perc = (prev_q_w / max_heating_power_w[j]) * 100.0 if max_heating_power_w[j] > 0 else 0.0
+            prev_q_perc = (
+                (prev_q_w / max_heating_power_w[i]) * 100.0
+                if max_heating_power_w[i] > 0
+                else 0.0
+            )
         else:
-            prev_q_perc = (prev_q_w / max_cooling_power_w[j]) * 100.0 if max_cooling_power_w[j] > 0 else 0.0
+            prev_q_perc = (
+                (prev_q_w / max_cooling_power_w[i]) * 100.0
+                if max_cooling_power_w[i] > 0
+                else 0.0
+            )
 
         # PENALTY: for changing Q (compressor slew rate)
         delta_q_perc = q_perc - prev_q_perc
-        penalty += (delta_q_perc**2) * Q_CHANGE_PENALTY
+        penalty += (delta_q_perc**2) * Q_CHANGE_PENALTY_WEIGHT
+
+    return penalty
+
+
+@njit(fastmath=True)
+def calculate_comfort_penalties(
+    temperature_sim_c,
+    co2_sim_ppm,
+    target_temperature,
+    temperature_tolerance_c,
+    co2_max_horizon_ppm,
+    num_nodes,
+    horizon_idx,
+):
+    TEMP_BELOW_PENALTY_WEIGHT = 7500.0
+    TEMP_ABOVE_PENALTY_WEIGHT = 5000.0
+    FREEZE_PENALTY_WEIGHT = 100000.0
+    CO2_PENALTY_WEIGHT = 100.0
+
+    penalty = 0.0
+
+    for i in range(num_nodes):
+        # PENALTY: for temperature outside the bounds
+        if not np.isnan(target_temperature[i]):
+            below_min = max(
+                0.0,
+                (target_temperature[i] - temperature_tolerance_c)
+                - temperature_sim_c[i],
+            )
+            above_max = max(
+                0.0,
+                temperature_sim_c[i]
+                - (target_temperature[i] + temperature_tolerance_c),
+            )
+
+            penalty += (below_min**2) * TEMP_BELOW_PENALTY_WEIGHT
+            penalty += (above_max**2) * TEMP_ABOVE_PENALTY_WEIGHT
+
+        # PENALTY: for freezing temperature (pipe burst risk)
+        pipe_freeze_risk = max(0.0, 16.0 - temperature_sim_c[i])
+        penalty += (pipe_freeze_risk**2) * FREEZE_PENALTY_WEIGHT
+
+        # PENALTY: for exceeding CO2 level
+        co2_violation = max(0.0, co2_sim_ppm[i] - co2_max_horizon_ppm[horizon_idx, i])
+        penalty += (co2_violation**2) * CO2_PENALTY_WEIGHT
+
+    return penalty
+
+
+@njit(fastmath=True)
+def calculate_financial_and_grid_penalties(
+    q_hvac_w_array,
+    v_vent_m3_s_array,
+    cop_heat,
+    cop_cool,
+    elec_cost_eur_mwh,
+    res_yield_kw,
+    contracted_power_kw,
+):
+    COST_PENALTY_WEIGHT = 100.0
+    POWER_EXCESS_PENALTY_WEIGHT = 100000.0
+
+    penalty = 0.0
+
+    q_heating_w = np.maximum(0.0, q_hvac_w_array)
+    q_cooling_w = np.maximum(0.0, -q_hvac_w_array)
+
+    # TODO: fix that
+    v_power_w = v_vent_m3_s_array * 1000.0
+
+    heat_elec_demand_kw = (np.sum(q_heating_w) / cop_heat) / 1000.0
+    cool_elec_demand_kw = (np.sum(q_cooling_w) / cop_cool) / 1000.0
+    vent_elec_demand_kw = np.sum(v_power_w) / 1000.0
+
+    total_elec_demand_kw = (
+        heat_elec_demand_kw + cool_elec_demand_kw + vent_elec_demand_kw
+    )
+
+    grid_buy_kw = max(0.0, total_elec_demand_kw - res_yield_kw)
+
+    # PENALTY: for high costs
+    step_financial_cost = grid_buy_kw * elec_cost_eur_mwh
+    penalty += step_financial_cost * COST_PENALTY_WEIGHT
+
+    # PENALTY: for exceeding max contracted power
+    if grid_buy_kw > contracted_power_kw:
+        excess_kw = grid_buy_kw - contracted_power_kw
+        penalty += (excess_kw**2) * POWER_EXCESS_PENALTY_WEIGHT
 
     return penalty
