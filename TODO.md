@@ -1,3 +1,1 @@
-- pojebany narost co2 i wentylacja dmucha jak pojebana
-- add bypass logic to hvac
 - add gas heating

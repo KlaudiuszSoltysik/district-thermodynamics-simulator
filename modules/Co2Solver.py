@@ -92,6 +92,4 @@ class Co2Solver:
                 (co2_generation_m3_s / self.volumes_m3) * 1000000 * micro_dt_s
             )
 
-            self.co2_ppm = np.maximum(self.co2_ppm, 400)
-
         return np.round(self.co2_ppm).astype(int)

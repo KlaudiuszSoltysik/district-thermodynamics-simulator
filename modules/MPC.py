@@ -13,6 +13,7 @@ class MPC:
     MAX_VENT_POWER_M3_S = 0.02
     CONTRACTED_POWER_KW = 15
     PERSON_PER_M3 = 1 / (30 * 2.5)
+    HRV_EFFICIENCY = 0.8
 
     def __init__(
         self,
@@ -187,6 +188,7 @@ class MPC:
                 np.asarray(current_q_w, dtype=float),
                 np.asarray(current_v_m3_s, dtype=float),
                 float(self.CONTRACTED_POWER_KW),
+                float(self.HRV_EFFICIENCY),
                 t_target_horizon_c.astype(float),
                 co2_max_horizon_ppm.astype(float),
                 is_occupied_horizon.astype(float),
@@ -311,6 +313,7 @@ def mpc_cost_function(
     current_q_hvac_w,
     current_v_m3_s,
     contracted_power_kw,
+    hrv_efficiency,
     t_target_horizon_c,
     co2_max_horizon_ppm,
     is_occupied_horizon,
@@ -399,14 +402,17 @@ def mpc_cost_function(
             total_co2_flow = co2_mixed + co2_infil + co2_vent
             co2_sim_ppm += (total_co2_flow / volumes_m3) * micro_dt_s
             co2_sim_ppm += (co2_gen_m3_s / volumes_m3) * 1000000 * micro_dt_s
-            co2_sim_ppm = np.maximum(co2_sim_ppm, 400)
 
         q_inter_w = np.dot(thermal_conductance_w_k, t_sim_c) - (
             sum_thermal_cond * t_sim_c
         )
         q_air_w = ext_air_conductance_w_k * (t_out_forecast_c[i] - t_sim_c)
         q_ground_w = ext_ground_conductance_w_k * (ground_temperature_c - t_sim_c)
-        q_vent_w = v_vent_m3_s * 1200 * (1 - 0.8) * (t_out_forecast_c[i] - t_sim_c)
+        
+        bypass_active = (t_out_forecast_c[i] < t_sim_c) & (t_sim_c > 22.0)
+        effective_eff = np.where(bypass_active, 0.0, hrv_efficiency)
+        
+        q_vent_w = v_vent_m3_s * 1200.0 * (1 - effective_eff) * (t_out_forecast_c[i] - t_sim_c)
 
         total_q_w = (
             q_inter_w + q_air_w + q_ground_w + q_vent_w + q_env_forecast_w[i] + q_hvac_w
@@ -421,7 +427,7 @@ def mpc_cost_function(
                 above_max = max(0, t_sim_c[j] - (target_t[j] + temperature_tolerance_c))
 
                 # PENALTY : for temperature outside the bounds
-                total_penalty += (below_min**2) * 5000
+                total_penalty += (below_min**2) * 7500
                 total_penalty += (above_max**2) * 5000
 
             # PENALTY: for freezieng temperature

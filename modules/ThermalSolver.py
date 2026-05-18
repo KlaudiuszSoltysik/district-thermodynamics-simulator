@@ -35,10 +35,14 @@ class ThermalSolver:
             self.ground_temperature_c - self.T
         )
 
+        bypass_active = (out_temperature_c < self.T) & (self.T > 22.0)
+        
+        effective_eff = np.where(bypass_active, 0.0, self.HRV_EFFICIENCY)
+
         q_vent_w = (
             v_hvac_m3_s
             * self.RHO_CP_AIR_J_M3K
-            * (1 - self.HRV_EFFICIENCY)
+            * (1.0 - effective_eff)
             * (out_temperature_c - self.T)
         )
 
