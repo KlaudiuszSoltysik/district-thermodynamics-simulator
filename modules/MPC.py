@@ -37,7 +37,7 @@ class MPC:
         self.max_heating_power_w = heat_pump.max_heating_power_w
         self.max_cooling_power_w = heat_pump.max_cooling_power_w
 
-        self.target_temp_24h_c = np.full((self.num_nodes, 24), 21)
+        self.target_temp_24h_c = np.full((self.num_nodes, 24), 21.0, dtype=float)
         self.max_co2_24h_ppm = np.full((self.num_nodes, 24), 1000)
         self.is_occupied_24h = np.zeros((self.num_nodes, 24))
 
@@ -418,11 +418,13 @@ def mpc_cost_function(
             ground_temperature_c - temperature_sim_c
         )
 
-        # TODO: fix that
+        target_temperature = temperature_target_horizon_c[i]
+        safe_target_temperature = np.where(np.isnan(target_temperature), 21.0, target_temperature)
+
         bypass_active = (temperature_out_forecast_c[i] < temperature_sim_c) & (
-            temperature_sim_c > 22
+            temperature_sim_c > safe_target_temperature
         )
-        effective_eff = np.where(bypass_active, 0, hrv_efficiency)
+        effective_eff = np.where(bypass_active, 0.0, hrv_efficiency)
 
         q_vent_w = (
             v_vent_m3_s
@@ -440,7 +442,7 @@ def mpc_cost_function(
         total_penalty += calculate_comfort_penalties(
             temperature_sim_c,
             co2_sim_ppm,
-            temperature_target_horizon_c[i],
+            target_temperature,
             temperature_tolerance_c,
             co2_max_horizon_ppm,
             num_nodes,
@@ -574,7 +576,7 @@ def calculate_financial_and_grid_penalties(
     q_heating_w = np.maximum(0.0, q_hvac_w_array)
     q_cooling_w = np.maximum(0.0, -q_hvac_w_array)
 
-    # TODO: fix that
+    # TODO: improve that by considering actual power curves of heat pump and fan, instead of simple linear model
     v_power_w = v_vent_m3_s_array * 1000.0
 
     heat_elec_demand_kw = (np.sum(q_heating_w) / cop_heat) / 1000.0

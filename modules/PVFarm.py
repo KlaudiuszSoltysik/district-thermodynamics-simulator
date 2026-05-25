@@ -1,7 +1,7 @@
 ﻿import numpy as np
 
 
-# TODO: Enhance physics
+# TODO: Make sure its calculated properly, add more parameters to make it more realistic
 class PVFarm:
     STC_RADIATION_W_M2 = 1000
 

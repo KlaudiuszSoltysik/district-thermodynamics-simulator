@@ -50,7 +50,7 @@ class Simulator:
         district_config_path,
         weather_path,
         prices_path,
-        hvac_schedule_patch,
+        dweller_schedule_patch,
         logger,
     ):
         self.logger = logger
@@ -59,8 +59,8 @@ class Simulator:
         with open(district_config_path, "r", encoding="utf-8") as f:
             district_data = yaml.safe_load(f)
 
-        with open(hvac_schedule_patch, "r", encoding="utf-8") as f:
-            hvac_schedule = yaml.safe_load(f)
+        with open(dweller_schedule_patch, "r", encoding="utf-8") as f:
+            dweller_schedule = yaml.safe_load(f)
 
         parser = DistrictModelParser(district_data)
         parser.parse()
@@ -93,7 +93,7 @@ class Simulator:
             self.heat_pump,
             self.num_nodes,
             self.index_to_id,
-            hvac_schedule,
+            dweller_schedule,
         )
 
         self.thermal_solver = ThermalSolver(
@@ -104,6 +104,8 @@ class Simulator:
             metadata["ground_temperature"],
             parser.areas_m2,
             self.num_nodes,
+            self.index_to_id,
+            dweller_schedule,
         )
 
         self.co2_solver = Co2Solver(
@@ -112,7 +114,7 @@ class Simulator:
             parser.infiltration_rate_m3_s,
             self.num_nodes,
             self.index_to_id,
-            hvac_schedule,
+            dweller_schedule,
         )
 
         self.metering_service = MeteringService(self.num_nodes, self.index_to_id)
@@ -160,7 +162,7 @@ class Simulator:
         self.simulation_time = self.current_time
 
         temperatures_array_c = self.thermal_solver.step(
-            dt, weather.temperature_c, q_total_w, v_hvac_m3_s
+            self.current_time, dt, weather.temperature_c, q_total_w, v_hvac_m3_s
         )
 
         co2_array_ppm = self.co2_solver.step(

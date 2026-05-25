@@ -202,7 +202,7 @@ async def main(
     district_config_path,
     weather_path,
     prices_path,
-    hvac_schedule_patch,
+    dweller_schedule_patch,
     dt_seconds=300,
     batch_size=12,
 ):
@@ -223,7 +223,7 @@ async def main(
         district_config_path=district_config_path,
         weather_path=weather_path,
         prices_path=prices_path,
-        hvac_schedule_patch=hvac_schedule_patch,
+        dweller_schedule_patch=dweller_schedule_patch,
         logger=logger,
     )
 

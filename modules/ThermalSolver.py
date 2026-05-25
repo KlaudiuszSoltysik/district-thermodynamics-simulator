@@ -14,6 +14,8 @@ class ThermalSolver:
         ground_temperature_c,
         areas_m2,
         num_nodes,
+        index_to_id,
+        dweller_schedule,
     ):
         self.thermal_conductance_w_k = thermal_conductance_w_k
         self.heat_capacity_j_k = heat_capacity_j_k
@@ -21,10 +23,20 @@ class ThermalSolver:
         self.ext_ground_conductance_w_k = ext_ground_conductance_w_k
         self.ground_temperature_c = ground_temperature_c
         self.areas_m2 = areas_m2
+        self.dweller_schedule = dweller_schedule
 
         self.temperatures_c = np.full(num_nodes, 21.0)
+        self.target_temp_24h_c = np.full((num_nodes, 24), 22.0)
 
-    def step(self, dt_seconds, out_temperature_c, q_total_w, v_hvac_m3_s):
+        for idx in range(num_nodes):
+            room_key = index_to_id[idx]
+            if room_key in dweller_schedule:
+                temps = dweller_schedule[room_key].get("target_temp_c")
+                if temps and len(temps) == 24:
+                    self.target_temp_24h_c[idx, :] = [21.0 if t is None else float(t) for t in temps]
+
+    def step(self, current_time, dt_seconds, out_temperature_c, q_total_w, v_hvac_m3_s):
+        current_target_temp = self.target_temp_24h_c[:, current_time.hour]
 
         q_inter_w = np.dot(self.thermal_conductance_w_k, self.temperatures_c) - (
             np.sum(self.thermal_conductance_w_k, axis=1) * self.temperatures_c
@@ -38,9 +50,8 @@ class ThermalSolver:
             self.ground_temperature_c - self.temperatures_c
         )
 
-        # TODO: fix that
         bypass_active = (out_temperature_c < self.temperatures_c) & (
-            self.temperatures_c > 22.0
+            self.temperatures_c > current_target_temp
         )
 
         effective_eff = np.where(bypass_active, 0.0, self.HRV_EFFICIENCY)

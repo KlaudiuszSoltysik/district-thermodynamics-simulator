@@ -1,7 +1,6 @@
 ﻿import numpy as np
 
 
-# TODO: Make sure its calculated properly
 class Co2Solver:
     CO2_GENERATION_M3_H = 0.025
     PERSON_PER_M3 = 1 / (30 * 2.5)

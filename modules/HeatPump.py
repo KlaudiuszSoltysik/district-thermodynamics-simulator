@@ -1,4 +1,4 @@
-﻿# TODO: Enhance physics
+﻿# TODO: Enhance physics model of heat pump, add more parameters and make it more realistic
 class HeatPump:
     def __init__(
         self,

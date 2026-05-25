@@ -44,7 +44,7 @@ class MeteringService:
         heat_elec_kw = np.sum(q_heating_w) / energy_costs.cop_heating / 1000
         cool_elec_kw = np.sum(q_cooling_w) / energy_costs.cop_cooling / 1000
 
-        # TODO: change that
+        # TODO: need to be changed when gas heating is added, right now it assumes all hvac power is electric
         vent_elec_kw = np.sum(v_vent_m3_s)
 
         total_elec_demand_kw = heat_elec_kw + cool_elec_kw + vent_elec_kw
@@ -54,7 +54,7 @@ class MeteringService:
         grid_sell_kw = np.maximum(0, pv_yield_kw - total_elec_demand_kw)
         pv_self_consumed_kw = min(total_elec_demand_kw, pv_yield_kw)
 
-        # TODO: fix that too
+        # TODO: related to gas heating, need to be changed when its added, right now it assumes all hvac power is electric
         gas_buy_kw = 0
 
         self.total_pv_yield_kwh += pv_yield_kw * hours
