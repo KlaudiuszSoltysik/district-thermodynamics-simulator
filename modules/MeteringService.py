@@ -34,7 +34,7 @@ class MeteringService:
             self.district_id_dict[i]: 0 for i in range(self.num_nodes)
         }
 
-    def update_meters(self, dt_seconds, energy_costs, q_hvac_w, v_vent_m3_s):
+    def update_meters(self, dt_seconds, energy_costs, q_hvac_w, v_vent_m3_s, actual_bess_power_kw):
         self.energy_costs = energy_costs
         hours = dt_seconds / 3600
 
@@ -44,20 +44,30 @@ class MeteringService:
         heat_elec_kw = np.sum(q_heating_w) / energy_costs.cop_heating / 1000
         cool_elec_kw = np.sum(q_cooling_w) / energy_costs.cop_cooling / 1000
 
-        # TODO: need to be changed when gas heating is added, right now it assumes all hvac power is electric
         vent_elec_kw = np.sum(v_vent_m3_s)
 
         total_elec_demand_kw = heat_elec_kw + cool_elec_kw + vent_elec_kw
-        pv_yield_kw = energy_costs.pv_yield_kw
+        
+        total_effective_demand_kw = max(0.0, total_elec_demand_kw + actual_bess_power_kw)
+        
+        bess_export_kw = max(0.0, -(total_elec_demand_kw + actual_bess_power_kw))
 
-        grid_buy_kw = np.maximum(0, total_elec_demand_kw - pv_yield_kw)
-        grid_sell_kw = np.maximum(0, pv_yield_kw - total_elec_demand_kw)
-        pv_self_consumed_kw = min(total_elec_demand_kw, pv_yield_kw)
+        potential_pv_yield_kw = energy_costs.pv_yield_kw
+        export_tariff = energy_costs.electricity_price_eur_per_mwh
 
-        # TODO: related to gas heating, need to be changed when its added, right now it assumes all hvac power is electric
+        if export_tariff < 0:
+            actual_pv_yield_kw = min(potential_pv_yield_kw, total_effective_demand_kw)
+            grid_sell_kw = bess_export_kw 
+        else:
+            actual_pv_yield_kw = potential_pv_yield_kw
+            grid_sell_kw = np.maximum(0, actual_pv_yield_kw - total_effective_demand_kw) + bess_export_kw
+
+        grid_buy_kw = np.maximum(0, total_effective_demand_kw - actual_pv_yield_kw)
+        pv_self_consumed_kw = min(total_effective_demand_kw, actual_pv_yield_kw)
+
         gas_buy_kw = 0
 
-        self.total_pv_yield_kwh += pv_yield_kw * hours
+        self.total_pv_yield_kwh += actual_pv_yield_kw * hours
         self.total_elec_import_kwh += grid_buy_kw * hours
         self.total_elec_export_kwh += grid_sell_kw * hours
         self.total_pv_self_consumed_kwh += pv_self_consumed_kw * hours
@@ -69,8 +79,6 @@ class MeteringService:
         self.admin_gas_cost += (gas_buy_kw * hours) * (
             energy_costs.gas_price_eur_per_mwh / 1000
         )
-
-        export_tariff = energy_costs.electricity_price_eur_per_mwh
 
         self.admin_elec_revenue += (grid_sell_kw * hours) * (export_tariff / 1000)
 
@@ -120,6 +128,7 @@ class MeteringService:
             "admin_meters": {
                 "electricity_import_kwh": self.total_elec_import_kwh,
                 "electricity_export_kwh": self.total_elec_export_kwh,
+                "pv_total_yield_kwh": self.total_pv_yield_kwh,
                 "pv_self_consumed_kwh": self.total_pv_self_consumed_kwh,
                 "pv_self_consumption_rate_pct": self_consumption_rate,
                 "pv_self_sufficiency_rate_pct": self_sufficiency_rate,

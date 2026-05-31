@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from modules.BESS import BESS
 from modules.Co2Solver import Co2Solver
 from modules.DistrictConfigParser import DistrictModelParser
 from modules.EnergyService import EnergyService
@@ -35,6 +36,8 @@ class SimulationStep:
     sys_pv_yield_kw: float
     sys_cop_heating: float
     sys_cop_cooling: float
+    bess_power_kw: float
+    bess_soc: float
     room_temperatures_c: Dict[str, float]
     room_co2_ppm: Dict[str, int]
     room_q_hvac_w: Dict[str, float]
@@ -89,27 +92,38 @@ class Simulator:
             parser.max_heating_power_w, parser.min_heating_power_w
         )
 
-        self.weather_solver = WeatherSolver(
-            parser.external_connections, parser.standards, self.num_nodes
+        self.bess = BESS(
+            capacity_kwh=metadata["bess_capacity_kwh"],
+            max_power_kw=metadata["bess_max_power_kw"],
+            efficiency=metadata["bess_efficiency"],
+            min_soc=metadata["bess_min_soc"],
+            max_soc=metadata["bess_max_soc"],
         )
 
         if controller_type == "MPC":
             self.controller = MPC(
                 self.pv_farm,
                 self.heat_pump,
+                self.bess,
                 self.num_nodes,
                 self.index_to_id,
                 dweller_schedule,
             )
         elif controller_type == "RBC":
             self.controller = RBC(
+                self.pv_farm,
                 self.heat_pump,
+                self.bess,
                 self.num_nodes,
                 self.index_to_id,
                 dweller_schedule,
             )
         else:
             raise ValueError(f"Nieznany typ kontrolera: {controller_type}")
+
+        self.weather_solver = WeatherSolver(
+            parser.external_connections, parser.standards, self.num_nodes
+        )
 
         self.thermal_solver = ThermalSolver(
             parser.thermal_conductance_w_k,
@@ -159,19 +173,24 @@ class Simulator:
             self.thermal_solver.temperatures_c,
         )
 
-        q_hvac_w, v_hvac_m3_s, forecast_data = self.controller.step(
-            self.current_time,
-            dt,
-            self.weather_solver,
-            self.thermal_solver,
-            self.co2_solver,
-            self.weather_service,
-            self.energy_service,
+        q_hvac_w, v_hvac_m3_s, requested_bess_power_kw, forecast_data = (
+            self.controller.step(
+                self.current_time,
+                dt,
+                self.weather_solver,
+                self.thermal_solver,
+                self.co2_solver,
+                self.weather_service,
+                self.energy_service,
+                self.bess.current_soc,
+            )
         )
 
         q_total_w = q_env_w + q_hvac_w
 
-        self.metering_service.update_meters(dt, energy_costs, q_hvac_w, v_hvac_m3_s)
+        actual_bess_power_kw, bess_soc = self.bess.step(dt, requested_bess_power_kw)
+
+        self.metering_service.update_meters(dt, energy_costs, q_hvac_w, v_hvac_m3_s, actual_bess_power_kw)
         meter_readings = self.metering_service.get_meter_readings()
 
         self.simulation_time = self.current_time
@@ -228,6 +247,8 @@ class Simulator:
             sys_pv_yield_kw=energy_costs.pv_yield_kw,
             sys_cop_heating=energy_costs.cop_heating,
             sys_cop_cooling=energy_costs.cop_cooling,
+            bess_power_kw=float(actual_bess_power_kw),
+            bess_soc=float(bess_soc),
             room_temperatures_c=room_temps,
             room_co2_ppm=room_co2,
             room_q_hvac_w=room_q_w,

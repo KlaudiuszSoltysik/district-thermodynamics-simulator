@@ -7,12 +7,16 @@ class RBC:
 
     def __init__(
         self,
+        pv_farm,
         heat_pump,
+        bess,
         num_nodes,
         district_id_dict,
         schedules_data,
     ):
+        self.pv_farm = pv_farm
         self.heat_pump = heat_pump
+        self.bess = bess
         self.num_nodes = num_nodes
         self.district_id_dict = district_id_dict
 
@@ -55,6 +59,7 @@ class RBC:
         co2_solver,
         weather_service,
         energy_service,
+        current_bess_soc
     ):
         current_h = current_time.hour
 
@@ -86,6 +91,30 @@ class RBC:
             if current_co2_ppm[i] > max_co2_ppm[i]:
                 current_v_m3_s[i] = self.MAX_VENT_POWER_M3_S
 
-        forecast_data = []
+        energy_costs = energy_service.get_effective_costs(current_time, self.pv_farm, self.heat_pump, weather_service.get_weather(current_time))
+        
+        q_heating_w = np.maximum(0, current_q_w)
+        q_cooling_w = np.maximum(0, -current_q_w)
+        v_power_w = current_v_m3_s * 1000.0
 
-        return current_q_w, current_v_m3_s, forecast_data
+        heat_elec_kw = (np.sum(q_heating_w) / energy_costs.cop_heating) / 1000.0
+        cool_elec_kw = (np.sum(q_cooling_w) / energy_costs.cop_cooling) / 1000.0
+        vent_elec_kw = np.sum(v_power_w) / 1000.0
+
+        total_demand_kw = heat_elec_kw + cool_elec_kw + vent_elec_kw
+        pv_yield_kw = energy_costs.pv_yield_kw
+
+        net_load_kw = total_demand_kw - pv_yield_kw
+
+        if net_load_kw < 0:
+            if current_bess_soc < self.bess.max_soc:
+                bess_req_kw = abs(net_load_kw)
+            else:
+                bess_req_kw = 0.0
+        else:
+            if current_bess_soc > self.bess.min_soc:
+                bess_req_kw = -net_load_kw
+            else:
+                bess_req_kw = 0.0
+
+        return current_q_w, current_v_m3_s, bess_req_kw, []

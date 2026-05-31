@@ -19,6 +19,7 @@ class MPC:
         self,
         pv_farm,
         heat_pump,
+        bess,
         num_nodes,
         district_id_dict,
         schedules_data,
@@ -27,10 +28,12 @@ class MPC:
 
         self.cached_q_plan_w = None
         self.cached_v_plan_m3_s = None
+        self.cached_bess_plan_kw = None
         self.steps_since_last_recalc = 0
 
         self.pv_farm = pv_farm
         self.heat_pump = heat_pump
+        self.bess = bess
         self.num_nodes = num_nodes
         self.district_id_dict = district_id_dict
 
@@ -92,6 +95,7 @@ class MPC:
         co2_solver,
         weather_service,
         energy_service,
+        current_bess_soc,
     ):
         horizon_steps = int((self.HORIZON_HOURS * 3600) / dt_seconds)
 
@@ -99,6 +103,7 @@ class MPC:
         if (
             self.cached_q_plan_w is None
             or self.cached_v_plan_m3_s is None
+            or self.cached_bess_plan_kw is None
             or self.steps_since_last_recalc >= self.RECALCULATION_INTERVAL_STEPS
         ):
             needs_recalc = True
@@ -118,6 +123,14 @@ class MPC:
             else:
                 current_q_w = np.zeros(self.num_nodes)
                 current_v_m3_s = np.zeros(self.num_nodes)
+
+            if (
+                self.cached_bess_plan_kw is not None
+                and self.steps_since_last_recalc < len(self.cached_bess_plan_kw)
+            ):
+                current_bess_kw = self.cached_bess_plan_kw[self.steps_since_last_recalc]
+            else:
+                current_bess_kw = 0.0
 
             temperature_out_forecast_c = np.zeros(horizon_steps)
             co2_out_forecast_ppm = np.zeros(horizon_steps)
@@ -164,13 +177,19 @@ class MPC:
                 self.get_target_trajectories(current_time, dt_seconds, horizon_steps)
             )
 
-            num_decisions = self.control_steps * self.num_nodes
+            num_decisions_q = self.control_steps * self.num_nodes
+            num_decisions_v = self.control_steps * self.num_nodes
+            num_decisions_bess = self.control_steps
 
-            bounds_q_perc = [(-100, 100) for _ in range(num_decisions)]
-            bounds_v_perc = [(0, 100) for _ in range(num_decisions)]
-            bounds_perc = bounds_q_perc + bounds_v_perc
+            bounds_q_perc = [(-100, 100) for _ in range(num_decisions_q)]
+            bounds_v_perc = [(0, 100) for _ in range(num_decisions_v)]
+            bounds_bess_perc = [(-100, 100) for _ in range(num_decisions_bess)]
 
-            initial_guess = np.zeros(num_decisions * 2)
+            bounds_perc = bounds_q_perc + bounds_v_perc + bounds_bess_perc
+
+            initial_guess = np.zeros(
+                num_decisions_q + num_decisions_v + num_decisions_bess
+            )
 
             base_people = co2_solver.volumes_m3 * self.PERSON_PER_M3
             co2_generation_rates_m3_s = (
@@ -183,6 +202,13 @@ class MPC:
                 np.asarray(self.max_heating_power_w, dtype=float),
                 np.asarray(self.max_cooling_power_w, dtype=float),
                 float(self.MAX_VENT_POWER_M3_S),
+                float(self.bess.max_power_kw),
+                float(self.bess.capacity_kwh),
+                float(self.bess.efficiency),
+                float(self.bess.min_soc),
+                float(self.bess.max_soc),
+                float(current_bess_soc),
+                float(current_bess_kw),
                 co2_generation_rates_m3_s.astype(float),
                 float(self.TEMPERATURE_TOLERANCE_C),
                 float(dt_seconds),
@@ -222,14 +248,16 @@ class MPC:
                 options={"maxiter": 10, "ftol": 1e-2, "disp": False},
             )
 
-            half_idx = self.control_steps * self.num_nodes
+            idx_q_end = self.control_steps * self.num_nodes
+            idx_v_end = idx_q_end + (self.control_steps * self.num_nodes)
 
-            optimal_q_percent = res.x[:half_idx].reshape(
+            optimal_q_percent = res.x[:idx_q_end].reshape(
                 (self.control_steps, self.num_nodes)
             )
-            optimal_v_percent = res.x[half_idx:].reshape(
+            optimal_v_percent = res.x[idx_q_end:idx_v_end].reshape(
                 (self.control_steps, self.num_nodes)
             )
+            optimal_bess_percent = res.x[idx_v_end:]
 
             optimal_q_w = np.where(
                 optimal_q_percent >= 0,
@@ -238,10 +266,13 @@ class MPC:
             )
             optimal_v_m3_s = (optimal_v_percent / 100) * self.MAX_VENT_POWER_M3_S
 
+            optimal_bess_kw = (optimal_bess_percent / 100.0) * self.bess.max_power_kw
+
             block_size = horizon_steps // self.control_steps
 
             self.cached_q_plan_w = np.repeat(optimal_q_w, block_size, axis=0)
             self.cached_v_plan_m3_s = np.repeat(optimal_v_m3_s, block_size, axis=0)
+            self.cached_bess_plan_kw = np.repeat(optimal_bess_kw, block_size, axis=0)
 
             forecast_data = []
             future_time = current_time
@@ -291,13 +322,15 @@ class MPC:
         if self.steps_since_last_recalc < len(self.cached_q_plan_w):  # type: ignore
             current_q_w = self.cached_q_plan_w[self.steps_since_last_recalc, :]  # type: ignore
             current_v_m3_s = self.cached_v_plan_m3_s[self.steps_since_last_recalc, :]  # type: ignore
+            current_bess_kw = self.cached_bess_plan_kw[self.steps_since_last_recalc]  # type: ignore
         else:
             current_q_w = np.zeros(self.num_nodes)
             current_v_m3_s = np.zeros(self.num_nodes)
+            current_bess_kw = 0.0
 
         self.steps_since_last_recalc += 1
 
-        return current_q_w, current_v_m3_s, forecast_data
+        return current_q_w, current_v_m3_s, current_bess_kw, forecast_data
 
 
 @njit(fastmath=True)
@@ -308,6 +341,13 @@ def mpc_cost_function(
     max_heating_power_w,
     max_cooling_power_w,
     max_vent_power_m3_s,
+    bess_max_power_kw,
+    bess_capacity_kwh,
+    bess_efficiency,
+    bess_min_soc,
+    bess_max_soc,
+    current_bess_soc,
+    current_bess_kw,
     co2_generation_rates_m3_s,
     temperature_tolerance_c,
     dt_seconds,
@@ -337,11 +377,15 @@ def mpc_cost_function(
     ground_temperature_c,
     heat_capacity_j_k,
 ):
-    half_idx = control_steps * num_nodes
+    idx_q_end = control_steps * num_nodes
+    idx_v_end = idx_q_end + (control_steps * num_nodes)
     block_size = horizon_steps // control_steps
 
     temperature_sim_c = np.copy(current_temperature_c)
     co2_sim_ppm = np.copy(current_co2_ppm)
+
+    soc_sim = float(current_bess_soc)
+    prev_bess_kw = float(current_bess_kw)
 
     prev_q_hvac_w = np.copy(current_q_hvac_w)
     prev_v_hvac_m3_s = np.copy(current_v_m3_s)
@@ -365,7 +409,7 @@ def mpc_cost_function(
 
         for j in range(num_nodes):
             idx_q = (c_idx * num_nodes) + j
-            idx_v = half_idx + (c_idx * num_nodes) + j
+            idx_v = idx_q_end + (c_idx * num_nodes) + j
 
             q_perc = x_flat[idx_q]
             v_perc = x_flat[idx_v]
@@ -380,6 +424,24 @@ def mpc_cost_function(
 
             v_vent_m3_s[j] = (v_perc / 100.0) * max_vent_power_m3_s
 
+        idx_bess = idx_v_end + c_idx
+        bess_perc = x_flat[idx_bess]
+        requested_bess_kw = (bess_perc / 100.0) * bess_max_power_kw
+
+        dt_hours = dt_seconds / 3600.0
+        actual_bess_kw = 0.0
+
+        if requested_bess_kw > 0:
+            available_capacity_kwh = (bess_max_soc - soc_sim) * bess_capacity_kwh
+            max_charge_kw = (available_capacity_kwh / bess_efficiency) / dt_hours
+            actual_bess_kw = min(requested_bess_kw, max_charge_kw)
+            soc_sim += (actual_bess_kw * dt_hours * bess_efficiency) / bess_capacity_kwh
+        elif requested_bess_kw < 0:
+            available_energy_kwh = (soc_sim - bess_min_soc) * bess_capacity_kwh
+            max_discharge_kw = -(available_energy_kwh * bess_efficiency / dt_hours)
+            actual_bess_kw = max(requested_bess_kw, max_discharge_kw)
+            soc_sim += (actual_bess_kw * dt_hours / bess_efficiency) / bess_capacity_kwh
+
         total_penalty += calculate_control_penalties(
             v_perc_array,
             q_perc_array,
@@ -388,8 +450,12 @@ def mpc_cost_function(
             max_vent_power_m3_s,
             max_heating_power_w,
             max_cooling_power_w,
+            actual_bess_kw,
+            prev_bess_kw,
             num_nodes,
         )
+
+        prev_bess_kw = actual_bess_kw
 
         for j in range(num_nodes):
             prev_v_hvac_m3_s[j] = v_vent_m3_s[j]
@@ -454,6 +520,7 @@ def mpc_cost_function(
         total_penalty += calculate_financial_and_grid_penalties(
             q_hvac_w,
             v_vent_m3_s,
+            actual_bess_kw,
             cop_heat_forecast[i],
             cop_cool_forecast[i],
             elec_cost_forecast_eur_mwh[i],
@@ -473,11 +540,14 @@ def calculate_control_penalties(
     max_vent_power_m3_s,
     max_heating_power_w,
     max_cooling_power_w,
+    actual_bess_kw,
+    prev_bess_kw,
     num_nodes,
 ):
     VENTILATION_PENALTY_WEIGHT = 1.0
     VENTILATION_CHANGE_PENALTY_WEIGHT = 5.0
     Q_CHANGE_PENALTY_WEIGHT = 5.0
+    BESS_CHANGE_PENALTY_WEIGHT = 0.0
 
     penalty = 0.0
 
@@ -511,6 +581,10 @@ def calculate_control_penalties(
         # PENALTY: for changing Q (compressor slew rate)
         delta_q_perc = q_perc - prev_q_perc
         penalty += (delta_q_perc**2) * Q_CHANGE_PENALTY_WEIGHT
+
+    # PENALTY: for changing BESS power (battery wear)
+    delta_bess_kw = actual_bess_kw - prev_bess_kw
+    penalty += (delta_bess_kw**2) * BESS_CHANGE_PENALTY_WEIGHT
 
     return penalty
 
@@ -564,6 +638,7 @@ def calculate_comfort_penalties(
 def calculate_financial_and_grid_penalties(
     q_hvac_w_array,
     v_vent_m3_s_array,
+    bess_power_kw,
     cop_heat,
     cop_cool,
     elec_cost_eur_mwh,
@@ -589,10 +664,24 @@ def calculate_financial_and_grid_penalties(
         heat_elec_demand_kw + cool_elec_demand_kw + vent_elec_demand_kw
     )
 
-    grid_buy_kw = max(0.0, total_elec_demand_kw - res_yield_kw)
+    total_effective_demand_kw = max(0.0, total_elec_demand_kw + bess_power_kw)
+    bess_export_kw = max(0.0, -(total_elec_demand_kw + bess_power_kw))
+
+    if elec_cost_eur_mwh < 0:
+        actual_pv_yield_kw = min(res_yield_kw, total_effective_demand_kw)
+        grid_sell_kw = bess_export_kw
+    else:
+        actual_pv_yield_kw = res_yield_kw
+        grid_sell_kw = (
+            max(0.0, actual_pv_yield_kw - total_effective_demand_kw) + bess_export_kw
+        )
+
+    grid_buy_kw = max(0.0, total_effective_demand_kw - actual_pv_yield_kw)
 
     # PENALTY: for high costs
-    step_financial_cost = grid_buy_kw * elec_cost_eur_mwh
+    step_financial_cost = (grid_buy_kw * elec_cost_eur_mwh) - (
+        grid_sell_kw * elec_cost_eur_mwh
+    )
     penalty += step_financial_cost * COST_PENALTY_WEIGHT
 
     # PENALTY: for exceeding max contracted power

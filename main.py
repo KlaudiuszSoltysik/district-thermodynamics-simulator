@@ -64,6 +64,8 @@ def reset_database(db_config, logger):
                 sys_pv_yield_kw DOUBLE PRECISION,
                 sys_cop_heating DOUBLE PRECISION,
                 sys_cop_cooling DOUBLE PRECISION,
+                bess_power_kw DOUBLE PRECISION,
+                bess_soc DOUBLE PRECISION,
                 room_temperatures_c JSONB,
                 room_co2_ppm JSONB,
                 room_q_hvac_w JSONB,
@@ -106,7 +108,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
         INSERT INTO simulation_telemetry (
             time, controller_type, out_temperature_c, out_wind_speed_m_s, out_wind_direction_deg, 
             out_sun_radiation_w_m2, out_sun_altitude_deg, out_sun_azimuth_deg, out_co2_ppm,
-            sys_electricity_price, sys_gas_price, sys_pv_yield_kw, sys_cop_heating, sys_cop_cooling,
+            sys_electricity_price, sys_gas_price, sys_pv_yield_kw, sys_cop_heating, sys_cop_cooling, bess_power_kw, bess_soc,
             room_temperatures_c, room_co2_ppm, room_q_hvac_w, room_q_hvac_perc, room_v_hvac_m3_s, meter_readings
         ) VALUES %s
     """
@@ -150,6 +152,8 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                     item.sys_pv_yield_kw,
                     item.sys_cop_heating,
                     item.sys_cop_cooling,
+                    item.bess_power_kw,
+                    item.bess_soc,
                     Json(item.room_temperatures_c),
                     Json(item.room_co2_ppm),
                     Json(item.room_q_hvac_w),
@@ -172,9 +176,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                     )
                     for f in item.controller_forecast
                 ]
-                logger.info(
-                    f"[{item.time}] Controller forecast saved."
-                )
+                logger.info(f"[{item.time}] Controller forecast saved.")
                 await asyncio.to_thread(
                     insert_batch, conn, upsert_forecast_query, current_horizon_data
                 )
