@@ -46,11 +46,12 @@ def reset_database(db_config, logger):
         cursor = conn.cursor()
 
         cursor.execute("DROP TABLE IF EXISTS simulation_telemetry CASCADE;")
-        cursor.execute("DROP TABLE IF EXISTS mpc_forecast CASCADE;")
+        cursor.execute("DROP TABLE IF EXISTS controller_forecast CASCADE;")
 
         cursor.execute("""
             CREATE TABLE simulation_telemetry (
                 time TIMESTAMPTZ NOT NULL,
+                controller_type VARCHAR(10) NOT NULL,
                 out_temperature_c DOUBLE PRECISION,
                 out_wind_speed_m_s DOUBLE PRECISION,
                 out_wind_direction_deg DOUBLE PRECISION,
@@ -74,13 +75,15 @@ def reset_database(db_config, logger):
         cursor.execute("SELECT create_hypertable('simulation_telemetry', 'time');")
 
         cursor.execute("""
-            CREATE TABLE mpc_forecast (
-                time TIMESTAMPTZ PRIMARY KEY,
+            CREATE TABLE controller_forecast (
+                time TIMESTAMPTZ NOT NULL,
+                controller_type VARCHAR(10) NOT NULL,
                 planned_q_w JSONB,
                 planned_v_m3_s JSONB,
                 planned_t_target_c JSONB,
                 planned_co2_max_ppm JSONB,
-                planned_is_occupied JSONB
+                planned_is_occupied JSONB,
+                PRIMARY KEY (time, controller_type)
             );
         """)
 
@@ -101,7 +104,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
 
     insert_telemetry_query = """
         INSERT INTO simulation_telemetry (
-            time, out_temperature_c, out_wind_speed_m_s, out_wind_direction_deg, 
+            time, controller_type, out_temperature_c, out_wind_speed_m_s, out_wind_direction_deg, 
             out_sun_radiation_w_m2, out_sun_altitude_deg, out_sun_azimuth_deg, out_co2_ppm,
             sys_electricity_price, sys_gas_price, sys_pv_yield_kw, sys_cop_heating, sys_cop_cooling,
             room_temperatures_c, room_co2_ppm, room_q_hvac_w, room_q_hvac_perc, room_v_hvac_m3_s, meter_readings
@@ -109,9 +112,9 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
     """
 
     upsert_forecast_query = """
-        INSERT INTO mpc_forecast (time, planned_q_w, planned_v_m3_s, planned_t_target_c, planned_co2_max_ppm, planned_is_occupied)
+        INSERT INTO controller_forecast (time, controller_type, planned_q_w, planned_v_m3_s, planned_t_target_c, planned_co2_max_ppm, planned_is_occupied)
         VALUES %s
-        ON CONFLICT (time) DO UPDATE SET
+        ON CONFLICT (time, controller_type) DO UPDATE SET
             planned_q_w = EXCLUDED.planned_q_w,
             planned_v_m3_s = EXCLUDED.planned_v_m3_s,
             planned_t_target_c = EXCLUDED.planned_t_target_c,
@@ -134,6 +137,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
             telemetry_batch.append(
                 (
                     item.time,
+                    item.controller_type,
                     item.out_temperature_c,
                     item.out_wind_speed_m_s,
                     item.out_wind_direction_deg,
@@ -155,20 +159,21 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                 )
             )
 
-            if item.mpc_forecast:
+            if item.controller_forecast:
                 current_horizon_data = [
                     (
                         f["time"],
+                        item.controller_type,
                         Json(f["q_w"]),
                         Json(f["v_m3_s"]),
                         Json(f["t_target_c"]),
                         Json(f["co2_max_ppm"]),
                         Json(f["is_occupied"]),
                     )
-                    for f in item.mpc_forecast
+                    for f in item.controller_forecast
                 ]
                 logger.info(
-                    f"[{item.time}] MPC forecast saved (Horizon: {len(item.mpc_forecast)} steps)"
+                    f"[{item.time}] Controller forecast saved."
                 )
                 await asyncio.to_thread(
                     insert_batch, conn, upsert_forecast_query, current_horizon_data
@@ -219,24 +224,36 @@ async def main(
         db_writer_worker(data_queue, db_config, batch_size, logger=logger)
     )
 
-    sim = Simulator(
+    sim_mpc = Simulator(
         district_config_path=district_config_path,
         weather_path=weather_path,
         prices_path=prices_path,
         dweller_schedule_patch=dweller_schedule_patch,
         logger=logger,
+        controller_type="MPC",
+    )
+
+    sim_rbc = Simulator(
+        district_config_path=district_config_path,
+        weather_path=weather_path,
+        prices_path=prices_path,
+        dweller_schedule_patch=dweller_schedule_patch,
+        logger=logger,
+        controller_type="RBC",
     )
 
     logger.info("Entering main physics loop...")
 
     while True:
-        result = sim.run_step(dt_seconds)
+        result_mpc = sim_mpc.run_step(dt_seconds)
+        result_rbc = sim_rbc.run_step(dt_seconds)
 
-        if not result:
+        if not result_mpc or not result_rbc:
             logger.info("Physics loop finished.")
             break
 
-        await data_queue.put(result)
+        await data_queue.put(result_mpc)
+        await data_queue.put(result_rbc)
 
         await asyncio.sleep(0)
 

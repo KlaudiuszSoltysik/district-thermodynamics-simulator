@@ -1,1 +1,4 @@
-- add gas heating
+- Battery Storage (BESS)
+- EV Chargers (Smart Charging)
+- Gas Boiler (Układ Hybrydowy)
+- Water heating (CWU)

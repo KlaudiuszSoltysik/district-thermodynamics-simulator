@@ -5,7 +5,7 @@ from scipy.optimize import minimize
 
 
 class MPC:
-    TEMPERATURE_TOLERANCE_C = 0.2
+    TEMPERATURE_TOLERANCE_C = 1.0
     CO2_GENERATION_M3_H_PER_PERSON = 0.025
     RECALCULATION_INTERVAL_STEPS = 12
     HORIZON_HOURS = 6
@@ -419,7 +419,9 @@ def mpc_cost_function(
         )
 
         target_temperature = temperature_target_horizon_c[i]
-        safe_target_temperature = np.where(np.isnan(target_temperature), 21.0, target_temperature)
+        safe_target_temperature = np.where(
+            np.isnan(target_temperature), 21.0, target_temperature
+        )
 
         bypass_active = (temperature_out_forecast_c[i] < temperature_sim_c) & (
             temperature_sim_c > safe_target_temperature
@@ -473,9 +475,9 @@ def calculate_control_penalties(
     max_cooling_power_w,
     num_nodes,
 ):
-    VENTILATION_PENALTY_WEIGHT = 50.0
-    VENTILATION_CHANGE_PENALTY_WEIGHT = 100.0
-    Q_CHANGE_PENALTY_WEIGHT = 100.0
+    VENTILATION_PENALTY_WEIGHT = 1.0
+    VENTILATION_CHANGE_PENALTY_WEIGHT = 5.0
+    Q_CHANGE_PENALTY_WEIGHT = 5.0
 
     penalty = 0.0
 
@@ -523,10 +525,10 @@ def calculate_comfort_penalties(
     num_nodes,
     horizon_idx,
 ):
-    TEMP_BELOW_PENALTY_WEIGHT = 7500.0
+    TEMP_BELOW_PENALTY_WEIGHT = 100000.0
     TEMP_ABOVE_PENALTY_WEIGHT = 5000.0
     FREEZE_PENALTY_WEIGHT = 100000.0
-    CO2_PENALTY_WEIGHT = 100.0
+    CO2_PENALTY_WEIGHT = 50.0
 
     penalty = 0.0
 
@@ -568,7 +570,7 @@ def calculate_financial_and_grid_penalties(
     res_yield_kw,
     contracted_power_kw,
 ):
-    COST_PENALTY_WEIGHT = 100.0
+    COST_PENALTY_WEIGHT = 10000.0
     POWER_EXCESS_PENALTY_WEIGHT = 100000.0
 
     penalty = 0.0

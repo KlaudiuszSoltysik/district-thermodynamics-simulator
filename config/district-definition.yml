@@ -7,7 +7,7 @@ metadata:
   elevation: 75.0
   timezone: "Europe/Warsaw"
   ground_temperature: 8.5
-  pv_max_power_kw: 20
+  pv_max_power_kw: 10
   pv_efficiency: 0.95
 
 buildings:

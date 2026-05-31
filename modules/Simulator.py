@@ -6,13 +6,14 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from modules.MeteringService import MeteringService
 from modules.Co2Solver import Co2Solver
 from modules.DistrictConfigParser import DistrictModelParser
 from modules.EnergyService import EnergyService
 from modules.HeatPump import HeatPump
+from modules.MeteringService import MeteringService
 from modules.MPC import MPC
 from modules.PVFarm import PVFarm
+from modules.RBC import RBC
 from modules.ThermalSolver import ThermalSolver
 from modules.WeatherService import WeatherService
 from modules.WeatherSolver import WeatherSolver
@@ -21,6 +22,7 @@ from modules.WeatherSolver import WeatherSolver
 @dataclass
 class SimulationStep:
     time: str
+    controller_type: str
     out_temperature_c: float
     out_wind_speed_m_s: float
     out_wind_direction_deg: float
@@ -39,7 +41,7 @@ class SimulationStep:
     room_q_hvac_perc: Dict[str, float]
     room_v_hvac_m3_s: Dict[str, float]
     meter_readings: Dict[str, Dict[str, Any]]
-    mpc_forecast: Optional[List[Dict[str, Any]]] = None
+    controller_forecast: Optional[List[Dict[str, Any]]] = None
 
 
 class Simulator:
@@ -52,7 +54,10 @@ class Simulator:
         prices_path,
         dweller_schedule_patch,
         logger,
+        controller_type,
     ):
+        self.controller_type = controller_type
+
         self.logger = logger
         self.logger.info("Initializing DistrictSimulation instance...")
 
@@ -88,13 +93,23 @@ class Simulator:
             parser.external_connections, parser.standards, self.num_nodes
         )
 
-        self.mpc = MPC(
-            self.pv_farm,
-            self.heat_pump,
-            self.num_nodes,
-            self.index_to_id,
-            dweller_schedule,
-        )
+        if controller_type == "MPC":
+            self.controller = MPC(
+                self.pv_farm,
+                self.heat_pump,
+                self.num_nodes,
+                self.index_to_id,
+                dweller_schedule,
+            )
+        elif controller_type == "RBC":
+            self.controller = RBC(
+                self.heat_pump,
+                self.num_nodes,
+                self.index_to_id,
+                dweller_schedule,
+            )
+        else:
+            raise ValueError(f"Nieznany typ kontrolera: {controller_type}")
 
         self.thermal_solver = ThermalSolver(
             parser.thermal_conductance_w_k,
@@ -144,7 +159,7 @@ class Simulator:
             self.thermal_solver.temperatures_c,
         )
 
-        q_hvac_w, v_hvac_m3_s, forecast_data = self.mpc.step(
+        q_hvac_w, v_hvac_m3_s, forecast_data = self.controller.step(
             self.current_time,
             dt,
             self.weather_solver,
@@ -183,7 +198,9 @@ class Simulator:
         }
 
         denominators = np.where(
-            q_hvac_w >= 0, self.mpc.max_heating_power_w, self.mpc.max_cooling_power_w
+            q_hvac_w >= 0,
+            self.controller.max_heating_power_w,
+            self.controller.max_cooling_power_w,
         )
         q_hvac_perc = (q_hvac_w / denominators) * 100
         room_q_perc = {
@@ -198,6 +215,7 @@ class Simulator:
 
         return SimulationStep(
             time=self.simulation_time.isoformat(),
+            controller_type=self.controller_type,
             out_temperature_c=weather.temperature_c,
             out_wind_speed_m_s=weather.wind_speed_m_s,
             out_wind_direction_deg=weather.wind_direction_deg,
@@ -216,5 +234,5 @@ class Simulator:
             room_q_hvac_perc=room_q_perc,
             room_v_hvac_m3_s=room_v_m3_s,
             meter_readings=meter_readings,
-            mpc_forecast=forecast_data,
+            controller_forecast=forecast_data,
         )
