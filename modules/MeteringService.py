@@ -40,7 +40,9 @@ class MeteringService:
             self.district_id_dict[i]: 0 for i in range(self.num_nodes)
         }
 
-    def update_meters(self, dt_seconds, energy_costs, q_hvac_w, v_vent_m3_s, actual_bess_power_kw):
+    def update_meters(
+        self, dt_seconds, energy_costs, q_hvac_w, v_vent_m3_s, actual_bess_power_kw
+    ):
         self.energy_costs = energy_costs
         hours = dt_seconds / 3600
         price_eur_per_kwh = energy_costs.electricity_price_eur_per_mwh / 1000
@@ -54,9 +56,11 @@ class MeteringService:
         vent_elec_kw = np.sum(v_vent_m3_s)
 
         total_elec_demand_kw = heat_elec_kw + cool_elec_kw + vent_elec_kw
-        
-        total_effective_demand_kw = max(0.0, total_elec_demand_kw + actual_bess_power_kw)
-        
+
+        total_effective_demand_kw = max(
+            0.0, total_elec_demand_kw + actual_bess_power_kw
+        )
+
         bess_export_kw = max(0.0, -(total_elec_demand_kw + actual_bess_power_kw))
 
         potential_pv_yield_kw = energy_costs.pv_yield_kw
@@ -67,22 +71,33 @@ class MeteringService:
             grid_sell_no_bess_kw = 0.0
         else:
             pv_yield_no_bess_kw = potential_pv_yield_kw
-            grid_sell_no_bess_kw = np.maximum(0, pv_yield_no_bess_kw - total_elec_demand_kw)
-            
+            grid_sell_no_bess_kw = np.maximum(
+                0, pv_yield_no_bess_kw - total_elec_demand_kw
+            )
+
         grid_buy_no_bess_kw = np.maximum(0, total_elec_demand_kw - pv_yield_no_bess_kw)
 
-        self.admin_elec_cost_without_bess += (grid_buy_no_bess_kw * hours) * price_eur_per_kwh
-        self.admin_elec_revenue_without_bess += (grid_sell_no_bess_kw * hours) * price_eur_per_kwh
+        self.admin_elec_cost_without_bess += (
+            grid_buy_no_bess_kw * hours
+        ) * price_eur_per_kwh
+        self.admin_elec_revenue_without_bess += (
+            grid_sell_no_bess_kw * hours
+        ) * price_eur_per_kwh
 
-        total_effective_demand_kw = max(0.0, total_elec_demand_kw + actual_bess_power_kw)
+        total_effective_demand_kw = max(
+            0.0, total_elec_demand_kw + actual_bess_power_kw
+        )
         bess_export_kw = max(0.0, -(total_elec_demand_kw + actual_bess_power_kw))
 
         if export_tariff < 0:
             actual_pv_yield_kw = min(potential_pv_yield_kw, total_effective_demand_kw)
-            grid_sell_kw = bess_export_kw 
+            grid_sell_kw = bess_export_kw
         else:
             actual_pv_yield_kw = potential_pv_yield_kw
-            grid_sell_kw = np.maximum(0, actual_pv_yield_kw - total_effective_demand_kw) + bess_export_kw
+            grid_sell_kw = (
+                np.maximum(0, actual_pv_yield_kw - total_effective_demand_kw)
+                + bess_export_kw
+            )
 
         grid_buy_kw = np.maximum(0, total_effective_demand_kw - actual_pv_yield_kw)
         pv_self_consumed_kw = min(total_effective_demand_kw, actual_pv_yield_kw)
@@ -109,7 +124,9 @@ class MeteringService:
         elif actual_bess_power_kw < 0:
             self.bess_discharge_energy_kwh += abs(actual_bess_power_kw) * hours
 
-        net_cost_no_bess = self.admin_elec_cost_without_bess - self.admin_elec_revenue_without_bess
+        net_cost_no_bess = (
+            self.admin_elec_cost_without_bess - self.admin_elec_revenue_without_bess
+        )
         net_cost_real = self.admin_elec_cost - self.admin_elec_revenue
         self.bess_arbitrage_profit = net_cost_no_bess - net_cost_real
 

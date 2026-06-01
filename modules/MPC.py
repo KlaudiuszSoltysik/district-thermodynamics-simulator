@@ -257,7 +257,7 @@ class MPC:
             optimal_v_percent = res.x[idx_q_end:idx_v_end].reshape(
                 (self.control_steps, self.num_nodes)
             )
-            
+
             optimal_bess_percent = res.x[idx_v_end:]
 
             optimal_q_w = np.where(
@@ -378,7 +378,7 @@ def mpc_cost_function(
     ground_temperature_c,
     heat_capacity_j_k,
 ):
-    BESS_BOUNDS_PENALTY_WEIGHT = 50000000.0 
+    BESS_BOUNDS_PENALTY_WEIGHT = 50000000.0
 
     idx_q_end = control_steps * num_nodes
     idx_v_end = idx_q_end + (control_steps * num_nodes)
@@ -429,7 +429,7 @@ def mpc_cost_function(
 
         idx_bess = idx_v_end + c_idx
         bess_perc = x_flat[idx_bess]
-        
+
         actual_bess_kw = (bess_perc / 100.0) * bess_max_power_kw
         dt_hours = dt_seconds / 3600.0
 
@@ -437,12 +437,16 @@ def mpc_cost_function(
             soc_sim += (actual_bess_kw * dt_hours * bess_efficiency) / bess_capacity_kwh
         elif actual_bess_kw < 0:
             soc_sim += (actual_bess_kw * dt_hours / bess_efficiency) / bess_capacity_kwh
-        
+
         # PENALTY: for violating BESS SOC limits (to prevent battery damage)
         if soc_sim > bess_max_soc:
-            total_penalty += ((soc_sim - bess_max_soc)**2) * BESS_BOUNDS_PENALTY_WEIGHT
+            total_penalty += (
+                (soc_sim - bess_max_soc) ** 2
+            ) * BESS_BOUNDS_PENALTY_WEIGHT
         elif soc_sim < bess_min_soc:
-            total_penalty += ((bess_min_soc - soc_sim)**2) * BESS_BOUNDS_PENALTY_WEIGHT
+            total_penalty += (
+                (bess_min_soc - soc_sim) ** 2
+            ) * BESS_BOUNDS_PENALTY_WEIGHT
 
         total_penalty += calculate_control_penalties(
             v_perc_array,
