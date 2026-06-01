@@ -190,7 +190,9 @@ class Simulator:
 
         actual_bess_power_kw, bess_soc = self.bess.step(dt, requested_bess_power_kw)
 
-        self.metering_service.update_meters(dt, energy_costs, q_hvac_w, v_hvac_m3_s, actual_bess_power_kw)
+        self.metering_service.update_meters(
+            dt, energy_costs, q_hvac_w, v_hvac_m3_s, actual_bess_power_kw
+        )
         meter_readings = self.metering_service.get_meter_readings()
 
         self.simulation_time = self.current_time
