@@ -117,4 +117,6 @@ class RBC:
             else:
                 bess_req_kw = 0.0
 
+        bess_req_kw = 0.0
+
         return current_q_w, current_v_m3_s, bess_req_kw, []

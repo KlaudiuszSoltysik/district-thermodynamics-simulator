@@ -9,7 +9,7 @@ metadata:
   ground_temperature: 8.5
   pv_max_power_kw: 10
   pv_efficiency: 0.95
-  bess_capacity_kwh: 10
+  bess_capacity_kwh: 10.0
   bess_max_power_kw: 2.5
   bess_efficiency: 0.95
   bess_min_soc: 0.2

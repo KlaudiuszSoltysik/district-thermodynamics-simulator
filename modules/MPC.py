@@ -5,7 +5,7 @@ from scipy.optimize import minimize
 
 
 class MPC:
-    TEMPERATURE_TOLERANCE_C = 1.0
+    TEMPERATURE_TOLERANCE_C = 0.2
     CO2_GENERATION_M3_H_PER_PERSON = 0.025
     RECALCULATION_INTERVAL_STEPS = 12
     HORIZON_HOURS = 6
@@ -183,7 +183,7 @@ class MPC:
 
             bounds_q_perc = [(-100, 100) for _ in range(num_decisions_q)]
             bounds_v_perc = [(0, 100) for _ in range(num_decisions_v)]
-            bounds_bess_perc = [(-100, 100) for _ in range(num_decisions_bess)]
+            bounds_bess_perc = [(-0, 0) for _ in range(num_decisions_bess)]
 
             bounds_perc = bounds_q_perc + bounds_v_perc + bounds_bess_perc
 
