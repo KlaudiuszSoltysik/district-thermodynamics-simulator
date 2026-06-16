@@ -7,6 +7,7 @@ import pandas as pd
 import yaml
 
 from modules.BESS import BESS
+from modules.BessMPC import BessMPC
 from modules.Co2Solver import Co2Solver
 from modules.DistrictConfigParser import DistrictModelParser
 from modules.EnergyService import EnergyService
@@ -15,6 +16,7 @@ from modules.MeteringService import MeteringService
 from modules.MPC import MPC
 from modules.PVFarm import PVFarm
 from modules.RBC import RBC
+from modules.RoughController import RoughController
 from modules.ThermalSolver import ThermalSolver
 from modules.WeatherService import WeatherService
 from modules.WeatherSolver import WeatherSolver
@@ -62,7 +64,7 @@ class Simulator:
         self.controller_type = controller_type
 
         self.logger = logger
-        self.logger.info("Initializing DistrictSimulation instance...")
+        self.logger.info(f"Initializing {self.controller_type} DistrictSimulation instance...")
 
         with open(district_config_path, "r", encoding="utf-8") as f:
             district_data = yaml.safe_load(f)
@@ -100,27 +102,6 @@ class Simulator:
             max_soc=metadata["bess_max_soc"],
         )
 
-        if controller_type == "MPC":
-            self.controller = MPC(
-                self.pv_farm,
-                self.heat_pump,
-                self.bess,
-                self.num_nodes,
-                self.index_to_id,
-                dweller_schedule,
-            )
-        elif controller_type == "RBC":
-            self.controller = RBC(
-                self.pv_farm,
-                self.heat_pump,
-                self.bess,
-                self.num_nodes,
-                self.index_to_id,
-                dweller_schedule,
-            )
-        else:
-            raise ValueError(f"Nieznany typ kontrolera: {controller_type}")
-
         self.weather_solver = WeatherSolver(
             parser.external_connections, parser.standards, self.num_nodes
         )
@@ -150,6 +131,52 @@ class Simulator:
 
         # self.gas_boiler = GasBoiler()
 
+        if controller_type == "double_MPC":
+            self.rough_controller = RoughController(
+                self.heat_pump,
+                self.thermal_solver,
+                self.num_nodes,
+                self.index_to_id,
+                dweller_schedule,
+            )
+
+            self.bess_mpc = BessMPC(
+                self.bess,
+                self.energy_service,
+                self.weather_service,
+                self.pv_farm,
+                self.heat_pump,
+            )
+
+            self.controller = MPC(
+                self.pv_farm,
+                self.heat_pump,
+                self.bess,
+                self.num_nodes,
+                self.index_to_id,
+                dweller_schedule,
+            )
+        elif controller_type == "MPC":
+            self.controller = MPC(
+                self.pv_farm,
+                self.heat_pump,
+                self.bess,
+                self.num_nodes,
+                self.index_to_id,
+                dweller_schedule,
+            )
+        elif controller_type == "RBC":
+            self.controller = RBC(
+                self.pv_farm,
+                self.heat_pump,
+                self.bess,
+                self.num_nodes,
+                self.index_to_id,
+                dweller_schedule,
+            )
+        else:
+            raise ValueError(f"Unknown controller type: {controller_type}")
+
         self.logger.info("Simulation configured.")
 
     def run_step(self, dt):
@@ -173,8 +200,24 @@ class Simulator:
             self.thermal_solver.temperatures_c,
         )
 
-        q_hvac_w, v_hvac_m3_s, requested_bess_power_kw, forecast_data = (
-            self.controller.step(
+        if self.controller_type == "double_MPC":
+            # 1. MAKRO: Baseline i Makler BESS
+            baseline_load, pv_forecast = self.rough_controller.predict_baseline(
+                self.current_time,
+                dt,
+                self.thermal_solver.temperatures_c,
+                self.weather_service,
+                self.energy_service,
+                self.pv_farm,
+            )
+
+            bess_plan_24h, internal_prices = self.bess_mpc.optimize(
+                self.current_time, dt, baseline_load, pv_forecast
+            )
+
+            requested_bess_power_kw = bess_plan_24h[0]
+
+            q_hvac_w, v_hvac_m3_s, _, forecast_data = self.controller.step(
                 self.current_time,
                 dt,
                 self.weather_solver,
@@ -183,8 +226,25 @@ class Simulator:
                 self.weather_service,
                 self.energy_service,
                 self.bess.current_soc,
+                custom_prices=internal_prices,
             )
-        )
+
+        else:
+            q_hvac_w, v_hvac_m3_s, requested_bess_power_kw, forecast_data = (
+                self.controller.step(
+                    self.current_time,
+                    dt,
+                    self.weather_solver,
+                    self.thermal_solver,
+                    self.co2_solver,
+                    self.weather_service,
+                    self.energy_service,
+                    self.bess.current_soc,
+                )
+            )
+
+        q_total_w = q_env_w + q_hvac_w
+        actual_bess_power_kw, bess_soc = self.bess.step(dt, requested_bess_power_kw)
 
         q_total_w = q_env_w + q_hvac_w
 

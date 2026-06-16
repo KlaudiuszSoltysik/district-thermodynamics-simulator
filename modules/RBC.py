@@ -59,7 +59,8 @@ class RBC:
         co2_solver,
         weather_service,
         energy_service,
-        current_bess_soc
+        current_bess_soc,
+        custom_prices=None,
     ):
         current_h = current_time.hour
 
@@ -91,8 +92,13 @@ class RBC:
             if current_co2_ppm[i] > max_co2_ppm[i]:
                 current_v_m3_s[i] = self.MAX_VENT_POWER_M3_S
 
-        energy_costs = energy_service.get_effective_costs(current_time, self.pv_farm, self.heat_pump, weather_service.get_weather(current_time))
-        
+        energy_costs = energy_service.get_effective_costs(
+            current_time,
+            self.pv_farm,
+            self.heat_pump,
+            weather_service.get_weather(current_time),
+        )
+
         q_heating_w = np.maximum(0, current_q_w)
         q_cooling_w = np.maximum(0, -current_q_w)
         v_power_w = current_v_m3_s * 1000.0

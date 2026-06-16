@@ -19,7 +19,7 @@ class EnergyService:
         self.prices_history = df.set_index("timestamp").sort_index()
 
     def get_effective_costs(
-        self, current_time: pd.Timestamp, pv_farm, heat_pump, weather
+        self, current_time, pv_farm, heat_pump, weather
     ):
         current_hour = current_time.floor("h")
 

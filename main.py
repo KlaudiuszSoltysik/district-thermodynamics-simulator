@@ -136,10 +136,15 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                 queue.task_done()
                 continue
 
+            if item.controller_type == "double_MPC":
+                controller_type = "MPC"
+            else:
+                controller_type = item.controller_type
+
             telemetry_batch.append(
                 (
                     item.time,
-                    item.controller_type,
+                    controller_type,
                     item.out_temperature_c,
                     item.out_wind_speed_m_s,
                     item.out_wind_direction_deg,
@@ -167,7 +172,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                 current_horizon_data = [
                     (
                         f["time"],
-                        item.controller_type,
+                        controller_type,
                         Json(f["q_w"]),
                         Json(f["v_m3_s"]),
                         Json(f["t_target_c"]),
@@ -176,7 +181,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                     )
                     for f in item.controller_forecast
                 ]
-                logger.info(f"[{item.time}] Controller forecast saved.")
+                logger.info(f"[{item.time}] {controller_type} controller forecast saved.")
                 await asyncio.to_thread(
                     insert_batch, conn, upsert_forecast_query, current_horizon_data
                 )
@@ -186,7 +191,7 @@ async def db_writer_worker(queue, db_config, batch_size, logger):
                     insert_batch, conn, insert_telemetry_query, telemetry_batch
                 )
                 logger.info(
-                    f"[{item.time}] Batch of {batch_size} telemetry steps saved."
+                    f"[{item.time}] {controller_type} batch of {batch_size} telemetry steps saved."
                 )
                 telemetry_batch.clear()
 
@@ -232,7 +237,7 @@ async def main(
         prices_path=prices_path,
         dweller_schedule_patch=dweller_schedule_patch,
         logger=logger,
-        controller_type="MPC",
+        controller_type="double_MPC",
     )
 
     sim_rbc = Simulator(
